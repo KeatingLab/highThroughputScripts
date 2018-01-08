@@ -140,21 +140,20 @@ def join_files(file_paths, out_file):
                 for line in chunk:
                     file.write(line)
 
-if __name__ == '__main__':
+def sort_barcodes_with_split(forward_path, reverse_path, out_dir):
     # Split files. Decrease num_lines to increase the number of jobs into which the
     # task is split. The more jobs created, the more overhead needed to open file streams.
     print("Splitting files...")
-    out_dir = "/Users/venkatesh-sivaraman/Documents/School/MIT/UROP2017/barcodes/"
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
     splits_1 = os.path.join(out_dir, "split_1")
     splits_2 = os.path.join(out_dir, "split_2")
-    test_1_paths = split_file("/Users/venkatesh-sivaraman/Documents/School/MIT/UROP2017/test_1.fastq", splits_1, num_lines=4000)
-    test_2_paths = split_file("/Users/venkatesh-sivaraman/Documents/School/MIT/UROP2017/test_2.fastq", splits_2, num_lines=4000)
+    forward_paths = split_file(forward_path, splits_1)
+    reverse_paths = split_file(reverse_path, splits_2)
 
     #Process files
     print("Processing files...")
-    path_pairs = zip(test_1_paths, test_2_paths)
+    path_pairs = zip(forward_paths, reverse_paths)
     def processor(i):
         print("Processing chunk {}".format(i))
         test_1, test_2 = path_pairs[i]
@@ -182,3 +181,13 @@ if __name__ == '__main__':
                 print("Deleting {}".format(path))
                 shutil.rmtree(path)
     print("Done.")
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 4:
+        print("Not enough arguments. Provide the path to the forward reads, then the path to the reverse reads, then the path to the output directory.")
+        exit(1)
+
+    in_path_1 = sys.argv[1]
+    in_path_2 = sys.argv[2]
+    out_dir = sys.argv[3]
