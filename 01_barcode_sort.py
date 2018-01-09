@@ -174,8 +174,8 @@ def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=6e7,
     splits_1 = os.path.join(out_dir, "split_1")
     splits_2 = os.path.join(out_dir, "split_2")
     if skip_split:
-        forward_paths = [os.path.join(split_1, x) for x in sorted(os.listdir(splits_1)) if x[0] != "."]
-        reverse_paths = [os.path.join(split_2, x) for x in sorted(os.listdir(splits_1)) if x[0] != "."]
+        forward_paths = [os.path.join(splits_1, x) for x in sorted(os.listdir(splits_1)) if x[0] != "."]
+        reverse_paths = [os.path.join(splits_2, x) for x in sorted(os.listdir(splits_2)) if x[0] != "."]
     else:
         pool = multiprocessing.Pool(processes=2)
         processor = partial(split_files_processor, num_lines) # Number of lines per file - must be 0 mod 4
@@ -190,8 +190,8 @@ def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=6e7,
     pool = multiprocessing.Pool(processes=NUM_PROCESSES)
     processor = partial(sort_barcodes_processor, out_dir)
     # Synchronous equivalent:
-    # map(processor, input_items)
-    result = pool.imap(processor, input_items)
+    map(processor, input_items)
+    #result = pool.imap(processor, input_items)
     pool.close()
     pool.join()
 
