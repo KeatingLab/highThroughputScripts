@@ -10,6 +10,7 @@ import shutil
 from itertools import izip
 import multiprocessing
 from functools import partial
+import time
 
 index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
                 "CAGATC","ACTTGA","GATCAG"]
@@ -209,7 +210,10 @@ if __name__ == '__main__':
         print("Not enough arguments. Provide the path to the forward reads, then the path to the reverse reads, then the path to the output directory.")
         exit(1)
 
+    a = time.time()  # Time the script started
     in_path_1 = sys.argv[1]
     in_path_2 = sys.argv[2]
     out_dir = sys.argv[3]
     sort_barcodes_with_split(in_path_1, in_path_2, out_dir)
+    b = time.time()
+    print("Took {} seconds to execute.".format(b - a))
