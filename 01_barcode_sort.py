@@ -9,6 +9,7 @@ import os
 import shutil
 from itertools import izip
 import multiprocessing
+from functools import partial
 
 index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
                 "CAGATC","ACTTGA","GATCAG"]
@@ -20,6 +21,8 @@ FORMAT = "fastq-sanger"
 SEQUENCE_QUALITY_KEY = "phred_quality"
 
 BARCODE_FILE_PREFIX = "barcode_"
+
+NUM_PROCESSES = 15
 
 def sort_sequence_reads(forward_path, reverse_path, out_dir):
     records_forward = SeqIO.parse(open(forward_path, "rU"), FORMAT)
@@ -140,6 +143,27 @@ def join_files(file_paths, out_file):
                 for line in chunk:
                     file.write(line)
 
+def sort_barcodes_processor(out_dir, input_info):
+    '''
+    Worker function for the multiprocessing pool.
+    '''
+    i, test_1, test_2 = input_info
+    print("Processing chunk {}".format(i))
+    chunk_out_dir = os.path.join(out_dir, str(i))
+    if not os.path.exists(chunk_out_dir):
+        os.mkdir(chunk_out_dir)
+    sort_sequence_reads(test_1, test_2, chunk_out_dir)
+
+def split_files_processor(num_lines, input_info):
+    path, out_dir = input_info
+    return split_file(path, out_dir, num_lines)
+
+def join_files_processor(out_dir, num_chunks, barcode):
+    #Get the paths for the appropriate reads for each chunk
+    barcode_paths = [os.path.join(out_dir, str(chunk_number), BARCODE_FILE_PREFIX + str(barcode)) for chunk_number in xrange(num_chunks)]
+    join_files(barcode_paths, os.path.join(out_dir, BARCODE_FILE_PREFIX + str(barcode)))
+
+
 def sort_barcodes_with_split(forward_path, reverse_path, out_dir):
     # Split files. Decrease num_lines to increase the number of jobs into which the
     # task is split. The more jobs created, the more overhead needed to open file streams.
@@ -148,38 +172,35 @@ def sort_barcodes_with_split(forward_path, reverse_path, out_dir):
         os.mkdir(out_dir)
     splits_1 = os.path.join(out_dir, "split_1")
     splits_2 = os.path.join(out_dir, "split_2")
-    forward_paths = split_file(forward_path, splits_1)
-    reverse_paths = split_file(reverse_path, splits_2)
+    pool = multiprocessing.Pool(processes=2)
+    processor = partial(split_files_processor, 4000) # Number of lines per file - must be 0 mod 4
+    #Input, output pairs for each splitting job
+    split_args = [(forward_path, splits_1), (reverse_path, splits_2)]
+    forward_paths, reverse_paths = pool.map(processor, split_args)
 
     #Process files
-    print("Processing files...")
-    path_pairs = zip(forward_paths, reverse_paths)
-    def processor(i):
-        print("Processing chunk {}".format(i))
-        test_1, test_2 = path_pairs[i]
-        chunk_out_dir = os.path.join(out_dir, str(i))
-        if not os.path.exists(chunk_out_dir):
-            os.mkdir(chunk_out_dir)
-        sort_sequence_reads(test_1, test_2, chunk_out_dir)
+    input_items = [(i, forward_paths[i], reverse_paths[i]) for i in range(len(forward_paths))]
 
-    pool = multiprocessing.Pool(processes=10)
-    pool.imap_unordered(processor, xrange(len(path_pairs)))
+    print("Processing files ({} chunks)...".format(len(input_items)))
+    pool = multiprocessing.Pool(processes=NUM_PROCESSES)
+    processor = partial(sort_barcodes_processor, out_dir)
+    # Synchronous equivalent:
+    # map(processor, input_items)
+    result = pool.imap(processor, input_items)
     pool.close()
     pool.join()
 
-    #Join files
     print("Joining files...")
-    for i in xrange(len(index_codes) * len(barcodes)):
-        #Get the paths for the appropriate reads for each chunk
-        barcode_paths = [os.path.join(out_dir, str(chunk_number), BARCODE_FILE_PREFIX + str(i)) for chunk_number in xrange(len(path_pairs))]
-        join_files(barcode_paths, os.path.join(out_dir, BARCODE_FILE_PREFIX + str(i)))
+    pool = multiprocessing.Pool(processes=NUM_PROCESSES)
+    processor = partial(join_files_processor, out_dir, len(input_items))
+    pool.map(processor, range(len(index_codes) * len(barcodes)))
 
-    if raw_input("Delete intermediate files? Type y for yes, n for no: ") == "y":
-        paths_to_delete = [splits_1, splits_2] + [os.path.join(out_dir, str(i)) for i in xrange(len(path_pairs))]
-        for path in paths_to_delete:
-            if os.path.exists(path):
-                print("Deleting {}".format(path))
-                shutil.rmtree(path)
+    print("Cleaning up...")
+    paths_to_delete = [splits_1, splits_2] + [os.path.join(out_dir, str(i)) for i in xrange(len(input_items))]
+    for path in paths_to_delete:
+        if os.path.exists(path):
+            print("Deleting {}".format(path))
+            shutil.rmtree(path)
     print("Done.")
 
 
@@ -191,3 +212,4 @@ if __name__ == '__main__':
     in_path_1 = sys.argv[1]
     in_path_2 = sys.argv[2]
     out_dir = sys.argv[3]
+    sort_barcodes_with_split(in_path_1, in_path_2, out_dir)
