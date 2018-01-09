@@ -165,7 +165,7 @@ def join_files_processor(out_dir, num_chunks, barcode):
     join_files(barcode_paths, os.path.join(out_dir, BARCODE_FILE_PREFIX + str(barcode)))
 
 
-def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=2e7):
+def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=6e7, skip_split=False):
     # Split files. Decrease num_lines to increase the number of jobs into which the
     # task is split. The more jobs created, the more overhead needed to open file streams.
     print("Splitting files...")
@@ -173,11 +173,15 @@ def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=2e7)
         os.mkdir(out_dir)
     splits_1 = os.path.join(out_dir, "split_1")
     splits_2 = os.path.join(out_dir, "split_2")
-    pool = multiprocessing.Pool(processes=2)
-    processor = partial(split_files_processor, num_lines) # Number of lines per file - must be 0 mod 4
-    #Input, output pairs for each splitting job
-    split_args = [(forward_path, splits_1), (reverse_path, splits_2)]
-    forward_paths, reverse_paths = pool.map(processor, split_args)
+    if skip_split:
+        forward_paths = [os.path.join(split_1, x) for x in sorted(os.listdir(splits_1)) if x[0] != "."]
+        reverse_paths = [os.path.join(split_2, x) for x in sorted(os.listdir(splits_1)) if x[0] != "."]
+    else:
+        pool = multiprocessing.Pool(processes=2)
+        processor = partial(split_files_processor, num_lines) # Number of lines per file - must be 0 mod 4
+        #Input, output pairs for each splitting job
+        split_args = [(forward_path, splits_1), (reverse_path, splits_2)]
+        forward_paths, reverse_paths = pool.map(processor, split_args)
 
     #Process files
     input_items = [(i, forward_paths[i], reverse_paths[i]) for i in range(len(forward_paths))]
@@ -215,9 +219,13 @@ if __name__ == '__main__':
     in_path_2 = sys.argv[2]
     out_dir = sys.argv[3]
     if len(sys.argv) > 4:
-        num_lines = int(sys.argv[4])
+        skip_split = sys.argv[4] == "nosplit"
+        if len(sys.argv) > 5:
+            num_lines = int(sys.argv[5])
+        else:
+            num_lines = 6e7
+        sort_barcodes_with_split(in_path_1, in_path_2, out_dir, num_lines, skip_split)
     else:
-        num_lines = 2e7
-    sort_barcodes_with_split(in_path_1, in_path_2, out_dir, num_lines)
+        sort_barcodes_with_split(in_path_1, in_path_2, out_dir)
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
