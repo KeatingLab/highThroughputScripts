@@ -165,7 +165,7 @@ def join_files_processor(out_dir, num_chunks, barcode):
     join_files(barcode_paths, os.path.join(out_dir, BARCODE_FILE_PREFIX + str(barcode)))
 
 
-def sort_barcodes_with_split(forward_path, reverse_path, out_dir):
+def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=2e7):
     # Split files. Decrease num_lines to increase the number of jobs into which the
     # task is split. The more jobs created, the more overhead needed to open file streams.
     print("Splitting files...")
@@ -174,7 +174,7 @@ def sort_barcodes_with_split(forward_path, reverse_path, out_dir):
     splits_1 = os.path.join(out_dir, "split_1")
     splits_2 = os.path.join(out_dir, "split_2")
     pool = multiprocessing.Pool(processes=2)
-    processor = partial(split_files_processor, 4000) # Number of lines per file - must be 0 mod 4
+    processor = partial(split_files_processor, num_lines) # Number of lines per file - must be 0 mod 4
     #Input, output pairs for each splitting job
     split_args = [(forward_path, splits_1), (reverse_path, splits_2)]
     forward_paths, reverse_paths = pool.map(processor, split_args)
@@ -214,6 +214,10 @@ if __name__ == '__main__':
     in_path_1 = sys.argv[1]
     in_path_2 = sys.argv[2]
     out_dir = sys.argv[3]
-    sort_barcodes_with_split(in_path_1, in_path_2, out_dir)
+    if len(sys.argv) > 4:
+        num_lines = int(sys.argv[4])
+    else:
+        num_lines = 2e7
+    sort_barcodes_with_split(in_path_1, in_path_2, out_dir, num_lines)
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
