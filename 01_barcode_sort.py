@@ -190,8 +190,8 @@ def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=6e7,
     pool = multiprocessing.Pool(processes=NUM_PROCESSES)
     processor = partial(sort_barcodes_processor, out_dir)
     # Synchronous equivalent:
-    map(processor, input_items)
-    #result = pool.imap(processor, input_items)
+    #map(processor, input_items)
+    result = pool.imap(processor, input_items)
     pool.close()
     pool.join()
 
