@@ -25,7 +25,7 @@ BARCODE_FILE_PREFIX = "barcode_"
 
 NUM_PROCESSES = 15
 
-def sort_sequence_reads(forward_path, reverse_path, out_dir, append=False, threads=1):
+def sort_sequence_reads(forward_path, reverse_path, out_dir, append=False, threads=1, chunk_size=1):
     records_forward = SeqIO.parse(open(forward_path, "rU"), FORMAT)
     records_reverse = SeqIO.parse(open(reverse_path, "rU"), FORMAT)
 
@@ -38,6 +38,8 @@ def sort_sequence_reads(forward_path, reverse_path, out_dir, append=False, threa
         pool.imap(processor, enumerate(izip(records_forward, records_reverse)))
         pool.close()
         pool.join()
+    elif chunk_size > 1:
+        sort_sequence_chunks(records_forward, records_reverse, chunk_size, output_streams)
     else:
         processor = partial(sort_sequence, output_streams)
         map(processor, enumerate(izip(records_forward, records_reverse)))
@@ -58,6 +60,36 @@ def sort_sequence(output_streams, (index, (forward, reverse)), locks=None):
     SeqIO.write(reverse, output_streams[barcode_number], FORMAT)
     if locks is not None:
         locks[barcode_number].release()
+
+def sort_sequence_chunks(records_forward, records_reverse, chunk_size, output_streams):
+    collected_forward = []
+    def collate_records():
+        # Collect reverse records now
+        barcode_bins = {}
+        for record_index in xrange(len(collected_forward)):
+            reverse = next(records_reverse, None)
+            if reverse is None: break
+            barcode_number = get_barcode_number(collected_forward[record_index], reverse)
+            if barcode_number == -1: continue
+            if barcode_number in barcode_bins:
+                barcode_bins[barcode_number].append((forward, reverse))
+            else:
+                barcode_bins[barcode_number] = [(forward, reverse)]
+        # Write the newly completed entries to disk
+        for barcode, items in barcode_bins.items():
+            for forward_item, reverse_item in items:
+                SeqIO.write(forward_item, output_streams[barcode], FORMAT)
+                SeqIO.write(reverse_item, output_streams[barcode], FORMAT)
+
+    chunk_index = 0
+    for forward in records_forward:
+        collected_forward.append(forward)
+        if len(collected_forward) == chunk_size:
+            print("Writing chunk {} to file...".format(chunk_index))
+            collate_records()
+            collected_forward = []
+            chunk_index += 1
+    collate_records()
 
 def open_output_streams(out_dir, prefix, num_files, append=False):
     return [open(os.path.join(out_dir, prefix + str(i)), "a" if append else "w") for i in xrange(num_files)]
@@ -303,6 +335,6 @@ if __name__ == '__main__':
     else:
         num_lines = 2e7
     #sort_barcodes_streaming(in_path_1, in_path_2, out_dir, num_lines=40000)
-    sort_sequence_reads(in_path_1, in_path_2, out_dir)
+    sort_sequence_reads(in_path_1, in_path_2, out_dir, chunk_size=20000)
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
