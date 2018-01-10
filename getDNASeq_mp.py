@@ -2,7 +2,7 @@
 
 from Bio import SeqIO,Seq
 import multiprocessing
-import sys
+import sys, os
 
 '''
 This code is a little difficult
@@ -15,41 +15,49 @@ myUniqueName = "2016_11_09"
 
 
 
-globalNumMutations = 5   # How many mutations are allowed in the overlapping region
-globalNumMaxOverlap = -1 # 0 for align to ref
+globalNumMutations = 9   # How many mutations are allowed in the overlapping region
+globalNumMaxOverlap = 0 # 0 for align to ref
                          #-1 for test all sliding positions
-globalMinNumOverlap = 70  # Minimum number of overlap before mapping to ref
+globalMinNumOverlap = 40  # Minimum number of overlap before mapping to ref
 globalReference=[]
 
 #global globalReference
-globalReference =["",""]
-globalReference[0] = "GGAGGCGGTAGCGGAGGCGGAGGGTCGGCTAGCGGTACCGGATCCGGTGGCCAATGGGCGCGTGAAATTGGCGCCCAACTGCGTCGCATGGCGGATGATCTGAATGCCCAATATGAACGTCGTCGCCAGGAGGAACAACAAAGAGGCGGCCGCGAT"
-globalReference[1] = "GGAGGCGGTAGCGGAGGCGGAGGGTCGGCTAGCGGTACCGGATCCGGTGGCCGTCCGGAAATTTGGATTGCGCAGGAACTGCGTCGTATTGGCGATGAATTTAATGCGTATTATGCGCGTCGCGTGTTTCTGAATAACTATCAGGGCGGCCGCGAT"
+# Generalize this to provide any number of potential scaffold sequences in a config file.
+# For TiteSeq, only one global reference.
+globalReference =[""]
+globalReference[0] = "ACTCGTCCCAAACAAGAACCTCAGGAAATCGATTTCCCGGACGATCTGCCAAACGACTTATCACG"
+#globalReference[1] = "GGAGGCGGTAGCGGAGGCGGAGGGTCGGCTAGCGGTACCGGATCCGGTGGCCGTCCGGAAATTTGGATTGCGCAGGAACTGCGTCGTATTGGCGATGAATTTAATGCGTATTATGCGCGTCGCGTGTTTCTGAATAACTATCAGGGCGGCCGCGAT"
 
 
-globalVarPos=[[],[]]
+'''globalVarPos=[[],[]]
 globalVarPos[0]=[54,57,60,63,66,69,75,81,87,90,96,99,102,105,111]
-globalVarPos[1]=[54,57,60,63,66,69,75,81,87,90,96,99,102,105,111]
+globalVarPos[1]=[54,57,60,63,66,69,75,81,87,90,96,99,102,105,111]'''
 
-globalRangeToExtract=[48,114]
+globalRangeToExtract=[0,65]#[48,114]
 
-globalReferenceScaffold=["",""]
+globalReferenceScaffold=[""]
 
 globalNCores = 16
 
 writeQueue = None
 
-def main(barcodeToProcess):
+MAX_OVERLAP = 20    # Avoids situations where forward and reverse reads get stacked
 
-    dirName = "/home/vxue/data/experimental/SORTCERY/"+myUniqueName+"/workspace/"
+num_stacked = 0
+num_correct = 0
+
+def main(barcode_file):
+
+    dirName = "."
+    #dirName = "/home/vxue/data/experimental/SORTCERY/"+myUniqueName+"/workspace/"
     initializeScaffold()
 
-    processFile(dirName+"barcode_",barcodeToProcess,dirName)
+    processFile(os.path.join(dirName, barcode_file), dirName, barcode_file)
 
 def initializeScaffold():
     global globalReferenceScaffold
     globalReferenceScaffold[0]=globalReference[0]
-    globalReferenceScaffold[1]=globalReference[1]
+    #globalReferenceScaffold[1]=globalReference[1]
 
     # Do you want the reference alignment to be
     # ...AAA...DDD......GGG (Use snippet below)
@@ -65,9 +73,9 @@ def initializeScaffold():
     #
     #    globalReferenceScaffold[bg] = "".join(myRef)
 
-def processFile(prefix,barcodeToProcess,dirName):
+def processFile(input_path,dirName, barcode):
 
-    records = SeqIO.parse(open(prefix+str(barcodeToProcess),"rU"), "fastq-sanger")
+    records = SeqIO.parse(open(input_path,"rU"), "fastq-sanger")
 
 
     manager = multiprocessing.Manager()
@@ -76,13 +84,14 @@ def processFile(prefix,barcodeToProcess,dirName):
     pool = multiprocessing.Pool(processes=globalNCores)
 
     #put listener to work first
-    writeListener = pool.apply_async(writeToFile, (writeQueue,dirName,barcodeToProcess))
+    writeListener = pool.apply_async(writeToFile, (writeQueue,dirName,barcode))
 
 
     myIt = pool.imap(func=getDNASeq,iterable=pairIterator(records),chunksize=1000)
-
+    #map(getDNASeq, pairIterator(records))
     for each in myIt:
         each
+    print("Number of excessively-stacked alignments: {} number 'correct': {}".format(num_stacked, num_correct))
 
 
     writeQueue.put('kill')
@@ -95,10 +104,11 @@ def pairIterator(records):
 
 def writeToFile(q, dirName,barcode):
     '''listens for messages on the q, writes to file. '''
+    print("Starting")
     fileArray1 = [open(dirName+"/seqframe/seqframe_"+str(each)+"_code_"+barcode+"",'w') for each in range(len(globalReference))]
     fileArray2 = [open(dirName+"/dnaframe/dnaframe_"+str(each)+"_code_"+barcode+"",'w') for each in range(len(globalReference))]
     fileArray3 = [open(dirName+"/qualframe/qualframe_"+str(each)+"_code_"+barcode+"",'w') for each in range(len(globalReference))]
-
+    print("Opened streams")
     while 1:
         res = q.get()
         if res == 'kill':
@@ -125,7 +135,7 @@ def passQuality(forwardRecord,reverseRecord):
     forward_Quality = forwardRecord.letter_annotations['phred_quality']
     reverse_Quality = reverseRecord.letter_annotations['phred_quality'][::-1]
     for i in range(40):
-        if(forward_Quality[i]<20 or reverse_Quality[i] < 20):
+        if(forward_Quality[i]< 20 or reverse_Quality[i] < 20):
             return False
     return True
 
@@ -242,6 +252,7 @@ def getDNASeq(myInput):
         refIndex,fullDNA,extractedAA,extractedQuality = getDNAAndAA(forwardRecord,reverseRecord)
 
         expectedLength = globalRangeToExtract[1]-globalRangeToExtract[0]
+        #print(expectedLength, len(fullDNA))
         if(expectedLength == len(fullDNA)):
             writeQueue.put((refIndex,extractedAA,fullDNA,str(extractedQuality)))
 
@@ -374,14 +385,19 @@ def getDNAAndAA(forwardRecord,reverseRecord):
     #print('+',forwardShift + forwardReads)
     #print('-',reverseShift+ reverseReads)
 
-    #print(myExtractedAA)
     #print(myExtractedQuality)
     #print('---------------------------------')
     #print(alignedFQuality)
     #print(alignedRQuality)
         #print str("".join(myRead)).rjust(120)
 
-    print (myExtractedAA)
+    #print (myExtractedAA)
+    if len(forwardShift) + len(forwardReads) - len(reverseShift) > MAX_OVERLAP:
+        global num_stacked
+        num_stacked += 1
+        return refIndex, "", "", ""
+    global num_correct
+    num_correct += 1
     return refIndex,myExtractedDNA, myExtractedAA, myExtractedQuality
 
 if __name__ == "__main__":

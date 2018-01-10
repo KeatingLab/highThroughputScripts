@@ -14,41 +14,43 @@ import time
 from cStringIO import StringIO
 import argparse
 
+# The possible index codes, found from the reverse complement of the first six bases
+# of the reverse read.
 index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
                 "CAGATC","ACTTGA","GATCAG"]
+# The possible barcodes, found from the first five bases of the forward read.
 barcodes = ["ACTCG","ACTGT", "AATGC", "AGTCA", "ATACG", "ATAGC",
                 "CGATC", "CTAAG", "CTCGA", "CGAAT", "CTGGT", "CGGTT",
                 "GACTT", "GTTCA", "GATAC", "GAGCA", "GATGA", "GTCTG",
                 "TCGGA", "TGACC", "TACTG", "TCCAG", "TCGAC", "TAGCT"]
+# The format used for SeqIO to process the files.
 FORMAT = "fastq-sanger"
+# The key in the SeqRecord objects used to obtain the sequence read quality.
 SEQUENCE_QUALITY_KEY = "phred_quality"
 
+# The prefix used to create output files for each barcode in the output directory.
 BARCODE_FILE_PREFIX = "barcode_"
 
+# The maximum number of processes to use (for the multithread version only).
 NUM_PROCESSES = 15
 
 
 ### Single thread implementation
 
 
-def sort_sequences_single_thread(forward_path, reverse_path, out_dir, append=False, threads=1, chunk_size=1):
+def sort_sequences_single_thread(forward_path, reverse_path, out_dir, append=False, chunk_size=1):
     records_forward = SeqIO.parse(open(forward_path, "rU"), FORMAT)
     records_reverse = SeqIO.parse(open(reverse_path, "rU"), FORMAT)
 
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
     output_streams = open_output_streams(out_dir, BARCODE_FILE_PREFIX, len(index_codes) * len(barcodes), append)
 
-    if threads > 1:
-        manager = multiprocessing.Manager()
-        processor = partial(sort_sequence, output_streams)
-        pool = multiprocessing.Pool(processes=threads)
-        pool.imap(processor, enumerate(izip(records_forward, records_reverse)))
-        pool.close()
-        pool.join()
-    elif chunk_size > 1:
+    if chunk_size > 1:
         sort_sequence_chunks(records_forward, records_reverse, chunk_size, output_streams)
     else:
-        processor = partial(sort_sequence, output_streams)
-        map(processor, enumerate(izip(records_forward, records_reverse)))
+        for record_item in enumerate(izip(records_forward, records_reverse)):
+            sort_sequence(output_streams, record_item)
 
     close_output_streams(output_streams)
 
@@ -66,6 +68,23 @@ def sort_sequence(output_streams, (index, (forward, reverse)), locks=None):
         locks[barcode_number].release()
 
 def sort_sequence_chunks(records_forward, records_reverse, chunk_size, output_streams):
+    '''
+    Sorts the reads in such a way as to minimize disk seeks. The algorithm works
+    as follows:
+
+    1. Read through the forward file and load `chunk_size` records into memory.
+    2. Read through the same amount of the reverse file, and for each record,
+        determine its barcode number and place the corresponding forward and
+        reverse records into the appropriate bin of a dictionary.
+    3. Iterate over the dictionary mapping barcode numbers to records, and write
+        out the records found for each barcode.
+    4. Repeat until the forward file is over.
+
+    For each chunk of the data, we seek once into the reverse file, then once for
+    each barcode bin that was occupied in that chunk. Thus, the larger the chunks,
+    the greater the RAM usage and the fewer disk seeks are required to read and
+    write out the data.
+    '''
     collected_forward = []
     def collate_records():
         # Collect reverse records now
@@ -292,8 +311,10 @@ def get_closest_barcode(sequence, barcode_list, match_threshold=None):
     will be admitted.
     '''
     threshold = match_threshold if match_threshold is not None else 0
-    return max(xrange(len(barcode_list)), key=lambda i: accuracy(sequence, barcode_list[i], threshold))
-
+    index, acc = max(((i, accuracy(sequence, barcode_list[i], threshold)) for i in  xrange(len(barcode_list))), key=lambda i: i[1])
+    if acc < 0:
+        return -1
+    return index
 
 
 if __name__ == '__main__':
