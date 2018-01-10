@@ -2,11 +2,11 @@
 
 from Bio import SeqIO,Seq
 import multiprocessing
-import sys 
+import sys
 
 '''
-This code is a little difficult 
-important parameters to update are 
+This code is a little difficult
+important parameters to update are
 
 myUniqueName
 
@@ -16,7 +16,7 @@ myUniqueName = "2016_11_09"
 
 
 globalNumMutations = 5   # How many mutations are allowed in the overlapping region
-globalNumMaxOverlap = -1 # 0 for align to ref 
+globalNumMaxOverlap = -1 # 0 for align to ref
                          #-1 for test all sliding positions
 globalMinNumOverlap = 70  # Minimum number of overlap before mapping to ref
 globalReference=[]
@@ -40,21 +40,21 @@ globalNCores = 16
 writeQueue = None
 
 def main(barcodeToProcess):
-    
+
     dirName = "/home/vxue/data/experimental/SORTCERY/"+myUniqueName+"/workspace/"
     initializeScaffold()
 
     processFile(dirName+"barcode_",barcodeToProcess,dirName)
-    
+
 def initializeScaffold():
     global globalReferenceScaffold
     globalReferenceScaffold[0]=globalReference[0]
     globalReferenceScaffold[1]=globalReference[1]
 
-    # Do you want the reference alignment to be 
+    # Do you want the reference alignment to be
     # ...AAA...DDD......GGG (Use snippet below)
     # AAABBBCCCDDDEEEFFFGGG (Use snippet above)
-    # 
+    #
 
     #for bg in range(len(globalReference)):
     #    myRef = list(globalReference[bg])
@@ -62,9 +62,9 @@ def initializeScaffold():
     #        myRef[aaPos]='.'
     #        myRef[aaPos+1]='.'
     #        myRef[aaPos+2]='.'
-    #        
+    #
     #    globalReferenceScaffold[bg] = "".join(myRef)
-    
+
 def processFile(prefix,barcodeToProcess,dirName):
 
     records = SeqIO.parse(open(prefix+str(barcodeToProcess),"rU"), "fastq-sanger")
@@ -77,13 +77,13 @@ def processFile(prefix,barcodeToProcess,dirName):
 
     #put listener to work first
     writeListener = pool.apply_async(writeToFile, (writeQueue,dirName,barcodeToProcess))
-    
-    
+
+
     myIt = pool.imap(func=getDNASeq,iterable=pairIterator(records),chunksize=1000)
-    
+
     for each in myIt:
         each
-    
+
 
     writeQueue.put('kill')
     pool.close()
@@ -104,23 +104,23 @@ def writeToFile(q, dirName,barcode):
         if res == 'kill':
             break
         #refIndex,extractedAA,fullDNA,str(extractedQuality)
-        f = fileArray1[res[0]]    
+        f = fileArray1[res[0]]
         f.write(str(res[1]) + '\n')
         f.flush()
-        
-        f = fileArray2[res[0]]    
+
+        f = fileArray2[res[0]]
         f.write(str(res[2]) + '\n')
         f.flush()
-        
-        f = fileArray3[res[0]]    
+
+        f = fileArray3[res[0]]
         f.write(str(res[3]) + '\n')
         f.flush()
-        
-    
+
+
     [each.close() for each in fileArray]
     [each.close() for each in fileArray2]
     [each.close() for each in fileArray3]
-    
+
 def passQuality(forwardRecord,reverseRecord):
     forward_Quality = forwardRecord.letter_annotations['phred_quality']
     reverse_Quality = reverseRecord.letter_annotations['phred_quality'][::-1]
@@ -131,7 +131,7 @@ def passQuality(forwardRecord,reverseRecord):
 
 def getAlignmentsForBestMatch(string1,string2):
     #Sliding window matcher
-    
+
     extendedString1 = "."*len(string2)+string1+"."*len(string2);
     extendedString2 = string2
     counter=0
@@ -149,30 +149,30 @@ def getAlignmentsForBestMatch(string1,string2):
                 numCompared+=1
             else:
                 numCompared+=1
-                
+
         #print extendedString1
         #print extendedString2 , counter
         #print '----------'
-        shiftArray.append((i-len(string2),counter,numCompared))    
+        shiftArray.append((i-len(string2),counter,numCompared))
         extendedString2 = "."+extendedString2;
 
     return sorted(shiftArray,key = lambda x:x[1],reverse=True)
-    
+
 def getAlignmentsForTailMatch(string1,string2,maxOverlap=-1,allowableMutations=0,verbose=False):
     #Sliding window matcher
-    
+
     extendedString1 = string1+"."*len(string2); #Extend the first string to accomadate second   #AAAAA.........
     extendedString2 = "."*len(string1)+string2  #Move the seond string to the tail of the first #.....BBBBBB
     counter=0
     shiftArray=[]
-    
+
     thisRange=0
     if(maxOverlap==-1):
         thisRange = len(string1)
     else:
         thisRange=maxOverlap
-    
-    
+
+
     #For all positions in the reference
     for i in range(thisRange+1):
         counter = 0;
@@ -180,7 +180,7 @@ def getAlignmentsForTailMatch(string1,string2,maxOverlap=-1,allowableMutations=0
 
         aString = ""
         bString = ""
-        
+
         for j in range(len(extendedString2)):
             if(extendedString2[j]=='.' or extendedString1[j]=='.'):
                 counter+=0
@@ -193,17 +193,17 @@ def getAlignmentsForTailMatch(string1,string2,maxOverlap=-1,allowableMutations=0
                 numCompared+=1
                 aString=aString+extendedString1[j]
                 bString=bString+extendedString2[j]
-        
-        
+
+
         if (verbose):
             #print aString,bString
             print(extendedString1)
             print(extendedString2 , scoreAlignment(aString,bString) , i)
             #print '----------'
-        
+
         shiftArray.append((len(string1)-i,counter,numCompared,scoreAlignment(aString,
                                                                              bString,
-                                                                             allowableMutations=allowableMutations)))    
+                                                                             allowableMutations=allowableMutations)))
         extendedString2 = extendedString2[1:];
 
     return sorted(shiftArray,key = lambda x:x[3],reverse=True)
@@ -212,7 +212,7 @@ def scoreAlignment(aString,bString,allowableMutations=0):
     #Takes in two aligned strings and scores them
     score=allowableMutations
     slack=allowableMutations
-    
+
     for i in range(len(aString)-1,-1,-1):
         #print aString[i],aString[i]
         if(aString[i]==bString[i]):
@@ -229,7 +229,7 @@ def getAASeq(myInput):
     forwardRecord,reverseRecord=myInput
     if(passQuality(forwardRecord,reverseRecord)):
         refIndex,fullDNA,extractedAA = getDNAAndAA(forwardRecord,reverseRecord)
-        
+
         expectedLength = (globalRangeToExtract[1]-globalRangeToExtract[0])/3
         if(expectedLength == len(extractedAA)):
             writeQueue.put((refIndex,extractedAA))
@@ -240,7 +240,7 @@ def getDNASeq(myInput):
     forwardRecord,reverseRecord=myInput
     if(passQuality(forwardRecord,reverseRecord)):
         refIndex,fullDNA,extractedAA,extractedQuality = getDNAAndAA(forwardRecord,reverseRecord)
-        
+
         expectedLength = globalRangeToExtract[1]-globalRangeToExtract[0]
         if(expectedLength == len(fullDNA)):
             writeQueue.put((refIndex,extractedAA,fullDNA,str(extractedQuality)))
@@ -250,42 +250,42 @@ def getDNASeq(myInput):
 
 def getBestBG(myRead):
     bestBG = -1
-    bestNumDNAMatched = -1 
+    bestNumDNAMatched = -1
     bestShift = -1
     bestNumCompared = -1
-    
+
     for i in range(len(globalReference)):
         shift,counter,numCompared = getAlignmentsForBestMatch(globalReferenceScaffold[i],myRead)[0]
-        
+
         if(counter >bestNumDNAMatched):
             bestBG = i
             bestNumDNAMatched = counter
             bestNumCompared=numCompared
             bestShift=shift
-            
+
     return bestBG,(bestShift,bestNumDNAMatched,bestNumCompared)
-        
+
 
 def getDNAAndAA(forwardRecord,reverseRecord):
-    
+
     ##################################
     alignToRef = True;
     numMutations = globalNumMutations
     numMaxOverlap = globalNumMaxOverlap
     ##################################
-    
+
     forwardReads = str(forwardRecord.seq)
     reverseReads = str(reverseRecord.seq.reverse_complement())
-    
+
     referenceShift,forwardShift,reverseShift="","",""
-    
-    refIndex,alignForwardToRef = getBestBG(forwardReads) 
-    # To get the best background, all references have to be tested. 
+
+    refIndex,alignForwardToRef = getBestBG(forwardReads)
+    # To get the best background, all references have to be tested.
     # Pull out the alignment to use in the rest of the process
-    
+
     alignReverseToRef=None
     reference = globalReferenceScaffold[refIndex]
-    
+
     if(alignForwardToRef[0]<0): #Alignment to reference should be moved up
         referenceShift = "."*-alignForwardToRef[0]
         forwardShift = ""
@@ -301,30 +301,30 @@ def getDNAAndAA(forwardRecord,reverseRecord):
                                                       allowableMutations=numMutations,
                                                       verbose=False)[0]
     reverseShift=forwardShift+" "*alignReverseToForward[0]
-    
+
     #MAP BOTH TO REFERENCE If there is <1 overlap
     if (alignReverseToForward[0]>=len(forwardReads)-globalMinNumOverlap):
         alignReverseToRef = getAlignmentsForBestMatch(reference,reverseReads)[0]
         reverseShift=referenceShift+" "*alignReverseToRef[0]
-        
+
     string0 = forwardShift + forwardReads
     string1 = reverseShift+ reverseReads
 
     #Assemble the transcript
-    
+
     forward_Quality = forwardRecord.letter_annotations['phred_quality']
     reverse_Quality = reverseRecord.letter_annotations['phred_quality'][::-1]
-    
+
     alignedFQuality = [0]*len(forwardShift)
     alignedFQuality.extend(forward_Quality)
     alignedRQuality = [0]*len(reverseShift)
     alignedRQuality.extend(reverse_Quality)
 
-    
+
     myRead = []
     myReadQuality=[]
     for i in range(len(string1)):
-        
+
         # Append nt to string if there is no reverse read
         if(i<len(string0)):
             if(string0[i]=='.'):
@@ -354,13 +354,13 @@ def getDNAAndAA(forwardRecord,reverseRecord):
                 myRead.append(string1[i])
                 myReadQuality.append(alignedRQuality[i])
 
-    
 
-    
-    
-    
+
+
+
+
     myDNA = "".join(myRead)
-    
+
     myFrameShift = len(referenceShift)
     myExtractedDNA = myDNA[(globalRangeToExtract[0]+myFrameShift):(globalRangeToExtract[1]+myFrameShift)]
     myExtractedDNA = myExtractedDNA.replace(" ","N")
@@ -368,12 +368,12 @@ def getDNAAndAA(forwardRecord,reverseRecord):
 
     myExtractedQuality =myReadQuality[(globalRangeToExtract[0]+myFrameShift):(globalRangeToExtract[1]+myFrameShift)]
     #if(refIndex==1):
-    
+
     #For debugging purposes - Uhash these 3 lines
-    #print( 'R',referenceShift+reference)                  
+    #print( 'R',referenceShift+reference)
     #print('+',forwardShift + forwardReads)
     #print('-',reverseShift+ reverseReads)
-    
+
     #print(myExtractedAA)
     #print(myExtractedQuality)
     #print('---------------------------------')
