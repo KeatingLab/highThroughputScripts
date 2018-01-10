@@ -11,6 +11,7 @@ from itertools import izip
 import multiprocessing, threading
 from functools import partial
 import time
+import argparse
 
 index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
                 "CAGATC","ACTTGA","GATCAG"]
@@ -25,7 +26,11 @@ BARCODE_FILE_PREFIX = "barcode_"
 
 NUM_PROCESSES = 15
 
-def sort_sequence_reads(forward_path, reverse_path, out_dir, append=False, threads=1, chunk_size=1):
+
+### Single thread implementation
+
+
+def sort_sequences_single_thread(forward_path, reverse_path, out_dir, append=False, threads=1, chunk_size=1):
     records_forward = SeqIO.parse(open(forward_path, "rU"), FORMAT)
     records_reverse = SeqIO.parse(open(reverse_path, "rU"), FORMAT)
 
@@ -49,8 +54,6 @@ def sort_sequence_reads(forward_path, reverse_path, out_dir, append=False, threa
     return 1
 
 def sort_sequence(output_streams, (index, (forward, reverse)), locks=None):
-    if index % 100 == 0:
-        print("Processing item {}".format(index))
     barcode_number = get_barcode_number(forward, reverse)
     if barcode_number == -1: return
 
@@ -98,177 +101,13 @@ def close_output_streams(streams):
     for stream in streams:
         stream.close()
 
-def get_barcode_number(forward, reverse):
-    '''
-    Determines the file number for the given forward and reverse sequences.
-    '''
-    sequence = str(forward.seq)
 
-    forward_quality = forward.letter_annotations[SEQUENCE_QUALITY_KEY]
-    # If any element of the sequence has quality less than 20, discard the read
-    if any(True for i in forward_quality if i < 20):
-       return -1
+### Multithread implementation
 
-    candidate_index = reverse.seq[:6].reverse_complement()
-    # For now, demands an exact match
-    index = get_closest_barcode(candidate_index, index_codes, 6)
-    if index == -1:
-       return -1
-
-    candidate_barcode = sequence[:5]
-    # Exact match
-    barcode = get_closest_barcode(candidate_barcode, barcodes, 5)
-    if barcode == -1:
-       return -1
-
-    return (index * len(barcodes)) + barcode
-
-def accuracy(seq, other_seq, threshold):
-    '''
-    Returns the number of identical nucleotides between seq and other_seq. If the
-    accuracy is less than threshold, returns -1.
-    '''
-    acc = len([i for i in range(len(seq)) if seq[i] == other_seq[i]])
-    if acc < threshold:
-        return -1
-    return acc
-
-def get_closest_barcode(sequence, barcode_list, match_threshold=None):
-    '''
-    Returns the index of the element of barcode_list that most closely matches
-    sequence. The number of identical nucleotides must be at least match_threshold.
-    If match_threshold is not passed, then any number of identical nucleotides
-    will be admitted.
-    '''
-    threshold = match_threshold if match_threshold is not None else 0
-    return max(xrange(len(barcode_list)), key=lambda i: accuracy(sequence, barcode_list[i], threshold))
-
-#### Splitting files
-
-def split_file(path, out_dir, num_lines=2e7):
-    '''
-    Splits the given file into smaller files in the given output directory, where
-    each smaller file has at most the given number of lines. Returns the list of
-    file paths created.
-    '''
-    file_name, extension = os.path.splitext(path)
-    file_name = os.path.basename(file_name)
-    ret = []
-
-    if not os.path.exists(out_dir):
-        os.mkdir(out_dir)
-
-    with open(path, "rU") as file:
-        current_out_file = None
-        current_out_index = 0
-        line_count = 0
-
-        for line in file:
-            if current_out_file is None:
-                new_path = os.path.join(out_dir, file_name + "_" + str(current_out_index) + extension)
-                current_out_file = open(new_path, "w")
-                current_out_index += 1
-                ret.append(new_path)
-
-            current_out_file.write(line)
-            line_count += 1
-
-            if line_count >= num_lines:
-                current_out_file.close()
-                current_out_file = None
-                line_count = 0
-
-        if current_out_file is not None:
-            current_out_file.close()
-
-    return ret
-
-def write_file_chunk(file, output, num_lines):
-    '''
-    Returns whether or not the file stream ended with this chunk.
-    '''
-    dest = os.path.dirname(output)
-    if not os.path.exists(dest):
-        os.mkdir(dest)
-    line_count = 0
-    with open(output, "w") as out_file:
-        while line_count < num_lines:
-            line = file.readline()
-            if len(line) == 0:
-                return True
-            out_file.write(line)
-            line_count += 1
-    return False
-
-def join_files(file_paths, out_file):
-    '''
-    Concatenates the files at the given paths into the file at out_file.
-    '''
-    with open(out_file, "w") as file:
-        for path in file_paths:
-            if not os.path.exists(path): continue
-            with open(path, "rU") as chunk:
-                for line in chunk:
-                    file.write(line)
-
-def join_files_processor(out_dir, num_chunks, barcode):
-    #Get the paths for the appropriate reads for each chunk
-    barcode_paths = [os.path.join(out_dir, str(chunk_number), BARCODE_FILE_PREFIX + str(barcode)) for chunk_number in xrange(num_chunks)]
-    join_files(barcode_paths, os.path.join(out_dir, BARCODE_FILE_PREFIX + str(barcode)))
-    for path in barcode_paths:
-        if not os.path.exists(path): continue
-        os.remove(path)
-
-class StreamingSortWorker(object):
-    '''
-    An object that lives in its own thread and sorts the reads from the fastq
-    files it is given into barcodes in its own out directory.
-    '''
-    def __init__(self, id, out_base_dir):
-        self.id = id
-        self.out_dir = os.path.join(out_base_dir, str(id))
-        self.is_working = False
-        self.chunk_number = -1
-        self.thread = None
-
-    def sort(self, forward_input, reverse_input, delete_on_complete=True):
-        self.thread = threading.current_thread()
-        self.is_working = True
-        if not os.path.exists(self.out_dir):
-            os.mkdir(self.out_dir)
-        sort_sequence_reads(forward_input, reverse_input, self.out_dir, append=True)
-        if delete_on_complete:
-            os.remove(forward_input)
-            os.remove(reverse_input)
-        self.is_working = False
-        self.thread = None
 
 available_chunk_files = []
 
-def streaming_work_supplier(lock, streams, split_dirs, num_lines, num_chunk_files):
-    global available_chunk_files
-    # Write the chunks
-    forward_stream, reverse_stream = streams
-    chunk_number = 0
-    while True:
-        with lock:
-            available_files = len(available_chunk_files)
-
-        if available_files < num_chunk_files:
-            print("Transferring chunk {}...".format(chunk_number))
-            forward_path = os.path.join(split_dirs[0], str(chunk_number))
-            reverse_path = os.path.join(split_dirs[1], str(chunk_number))
-            finished_1 = write_file_chunk(forward_stream, forward_path, num_lines)
-            finished_2 = write_file_chunk(reverse_stream, reverse_path, num_lines)
-            with lock:
-                available_chunk_files.append((forward_path, reverse_path))
-
-            chunk_number += 1
-            if finished_1 or finished_2:
-                print("Finished reading chunks.")
-                return
-
-def sort_barcodes_streaming(forward_path, reverse_path, out_dir, num_lines=6e7, num_threads=4):
+def sort_sequences_multithread(forward_path, reverse_path, out_dir, num_lines=6e7, num_threads=4):
     '''
     The idea behind the streaming version is to transfer chunks of size num_lines
     into temporary files, then hand them to worker threads to sort. Each worker
@@ -320,21 +159,164 @@ def sort_barcodes_streaming(forward_path, reverse_path, out_dir, num_lines=6e7, 
             shutil.rmtree(path)
     print("Done.")
 
+class StreamingSortWorker(object):
+    '''
+    An object that lives in its own thread and sorts the reads from the fastq
+    files it is given into barcodes in its own out directory.
+    '''
+    def __init__(self, id, out_base_dir):
+        self.id = id
+        self.out_dir = os.path.join(out_base_dir, str(id))
+        self.is_working = False
+        self.chunk_number = -1
+        self.thread = None
+
+    def sort(self, forward_input, reverse_input, delete_on_complete=True):
+        self.thread = threading.current_thread()
+        self.is_working = True
+        if not os.path.exists(self.out_dir):
+            os.mkdir(self.out_dir)
+        sort_sequences_single_thread(forward_input, reverse_input, self.out_dir, append=True)
+        if delete_on_complete:
+            os.remove(forward_input)
+            os.remove(reverse_input)
+        self.is_working = False
+        self.thread = None
+
+def streaming_work_supplier(lock, streams, split_dirs, num_lines, num_chunk_files):
+    global available_chunk_files
+    # Write the chunks
+    forward_stream, reverse_stream = streams
+    chunk_number = 0
+    while True:
+        with lock:
+            available_files = len(available_chunk_files)
+
+        if available_files < num_chunk_files:
+            print("Transferring chunk {}...".format(chunk_number))
+            forward_path = os.path.join(split_dirs[0], str(chunk_number))
+            reverse_path = os.path.join(split_dirs[1], str(chunk_number))
+            finished_1 = write_file_chunk(forward_stream, forward_path, num_lines)
+            finished_2 = write_file_chunk(reverse_stream, reverse_path, num_lines)
+            with lock:
+                available_chunk_files.append((forward_path, reverse_path))
+
+            chunk_number += 1
+            if finished_1 or finished_2:
+                print("Finished reading chunks.")
+                return
+
+def write_file_chunk(file, output, num_lines):
+    '''
+    Returns whether or not the file stream ended with this chunk.
+    '''
+    dest = os.path.dirname(output)
+    if not os.path.exists(dest):
+        os.mkdir(dest)
+    line_count = 0
+    with open(output, "w") as out_file:
+        while line_count < num_lines:
+            line = file.readline()
+            if len(line) == 0:
+                return True
+            out_file.write(line)
+            line_count += 1
+    return False
+
+def join_files(file_paths, out_file):
+    '''
+    Concatenates the files at the given paths into the file at out_file.
+    '''
+    with open(out_file, "w") as file:
+        for path in file_paths:
+            if not os.path.exists(path): continue
+            with open(path, "rU") as chunk:
+                for line in chunk:
+                    file.write(line)
+
+def join_files_processor(out_dir, num_chunks, barcode):
+    #Get the paths for the appropriate reads for each chunk
+    barcode_paths = [os.path.join(out_dir, str(chunk_number), BARCODE_FILE_PREFIX + str(barcode)) for chunk_number in xrange(num_chunks)]
+    join_files(barcode_paths, os.path.join(out_dir, BARCODE_FILE_PREFIX + str(barcode)))
+    for path in barcode_paths:
+        if not os.path.exists(path): continue
+        os.remove(path)
+
+
+### Barcode sorting logic
+
+
+def get_barcode_number(forward, reverse):
+    '''
+    Determines the barcode number for the given forward and reverse sequences.
+    '''
+    sequence = str(forward.seq)
+
+    forward_quality = forward.letter_annotations[SEQUENCE_QUALITY_KEY]
+    # If any element of the sequence has quality less than 20, discard the read
+    if any(True for i in forward_quality if i < 20):
+       return -1
+
+    candidate_index = reverse.seq[:6].reverse_complement()
+    # For now, demands an exact match
+    index = get_closest_barcode(candidate_index, index_codes, 6)
+    if index == -1:
+       return -1
+
+    candidate_barcode = sequence[:5]
+    # Exact match
+    barcode = get_closest_barcode(candidate_barcode, barcodes, 5)
+    if barcode == -1:
+       return -1
+
+    return (index * len(barcodes)) + barcode
+
+def accuracy(seq, other_seq, threshold):
+    '''
+    Returns the number of identical nucleotides between seq and other_seq. If the
+    accuracy is less than threshold, returns -1.
+    '''
+    acc = len([i for i in range(len(seq)) if seq[i] == other_seq[i]])
+    if acc < threshold:
+        return -1
+    return acc
+
+def get_closest_barcode(sequence, barcode_list, match_threshold=None):
+    '''
+    Returns the index of the element of barcode_list that most closely matches
+    sequence. The number of identical nucleotides must be at least match_threshold.
+    If match_threshold is not passed, then any number of identical nucleotides
+    will be admitted.
+    '''
+    threshold = match_threshold if match_threshold is not None else 0
+    return max(xrange(len(barcode_list)), key=lambda i: accuracy(sequence, barcode_list[i], threshold))
+
+
 
 if __name__ == '__main__':
-    if len(sys.argv) < 4:
-        print("Not enough arguments. Provide the path to the forward reads, then the path to the reverse reads, then the path to the output directory.")
-        exit(1)
-
     a = time.time()  # Time the script started
-    in_path_1 = sys.argv[1]
-    in_path_2 = sys.argv[2]
-    out_dir = sys.argv[3]
-    if len(sys.argv) > 4:
-        num_lines = int(sys.argv[4])
+    parser = argparse.ArgumentParser(description='Sort a pair of forward and reverse reads in FASTQ format into separate files for each barcode.')
+    parser.add_argument('forward', metavar='F', type=str,
+                        help='The path to the forward reads')
+    parser.add_argument('reverse', metavar='R', type=str,
+                        help='The path to the reverse reads')
+    parser.add_argument('out', metavar='O', type=str,
+                        help='The path to the output directory')
+    parser.add_argument('-m', '--mode', type=str, default='single',
+                        help='The iteration mode ("single" or "multi")')
+    parser.add_argument('-n', '--numlines', type=int, default=20000,
+                        help='The number of lines to break the file into when reading')
+    args = parser.parse_args()
+
+    if args.numlines % 4 != 0:
+        print("Number of lines per chunk must be a multiple of 4.")
+        exit(1)
+        
+    if args.mode == 'single':
+        sort_sequences_single_thread(args.forward, args.reverse, args.out, chunk_size=args.numlines / 4)
+    elif args.mode == 'multi':
+        sort_sequences_multithread(args.forward, args.reverse, args.out, num_lines=args.numlines)
     else:
-        num_lines = 2e7
-    #sort_barcodes_streaming(in_path_1, in_path_2, out_dir, num_lines=40000)
-    sort_sequence_reads(in_path_1, in_path_2, out_dir, chunk_size=20000)
+        print("Unidentified mode: expected 'single' or 'multi'")
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
