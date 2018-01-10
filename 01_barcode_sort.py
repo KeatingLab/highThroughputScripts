@@ -25,25 +25,42 @@ BARCODE_FILE_PREFIX = "barcode_"
 
 NUM_PROCESSES = 15
 
-def sort_sequence_reads(forward_path, reverse_path, out_dir):
+def sort_sequence_reads(forward_path, reverse_path, out_dir, append=False, threads=1):
     records_forward = SeqIO.parse(open(forward_path, "rU"), FORMAT)
     records_reverse = SeqIO.parse(open(reverse_path, "rU"), FORMAT)
 
-    output_streams = open_output_streams(out_dir, BARCODE_FILE_PREFIX, len(index_codes) * len(barcodes))
+    output_streams = open_output_streams(out_dir, BARCODE_FILE_PREFIX, len(index_codes) * len(barcodes), append)
 
-    for (forward, reverse) in izip(records_forward, records_reverse):
-        barcode_number = get_barcode_number(forward, reverse)
-        if barcode_number == -1: continue
-
-        SeqIO.write(forward, output_streams[barcode_number], FORMAT)
-        SeqIO.write(reverse, output_streams[barcode_number], FORMAT)
+    if threads > 1:
+        manager = multiprocessing.Manager()
+        processor = partial(sort_sequence, output_streams)
+        pool = multiprocessing.Pool(processes=threads)
+        pool.imap(processor, enumerate(izip(records_forward, records_reverse)))
+        pool.close()
+        pool.join()
+    else:
+        processor = partial(sort_sequence, output_streams)
+        map(processor, enumerate(izip(records_forward, records_reverse)))
 
     close_output_streams(output_streams)
 
     return 1
 
-def open_output_streams(out_dir, prefix, num_files):
-    return [open(os.path.join(out_dir, prefix + str(i)), "w") for i in xrange(num_files)]
+def sort_sequence(output_streams, (index, (forward, reverse)), locks=None):
+    if index % 100 == 0:
+        print("Processing item {}".format(index))
+    barcode_number = get_barcode_number(forward, reverse)
+    if barcode_number == -1: return
+
+    if locks is not None:
+        locks[barcode_number].acquire()
+    SeqIO.write(forward, output_streams[barcode_number], FORMAT)
+    SeqIO.write(reverse, output_streams[barcode_number], FORMAT)
+    if locks is not None:
+        locks[barcode_number].release()
+
+def open_output_streams(out_dir, prefix, num_files, append=False):
+    return [open(os.path.join(out_dir, prefix + str(i)), "a" if append else "w") for i in xrange(num_files)]
 
 def close_output_streams(streams):
     for stream in streams:
@@ -162,21 +179,6 @@ def join_files(file_paths, out_file):
                 for line in chunk:
                     file.write(line)
 
-def sort_barcodes_processor(out_dir, input_info):
-    '''
-    Worker function for the multiprocessing pool.
-    '''
-    i, test_1, test_2 = input_info
-    print("Processing chunk {}".format(i))
-    chunk_out_dir = os.path.join(out_dir, str(i))
-    if not os.path.exists(chunk_out_dir):
-        os.mkdir(chunk_out_dir)
-    sort_sequence_reads(test_1, test_2, chunk_out_dir)
-
-def split_files_processor(num_lines, input_info):
-    path, out_dir = input_info
-    return split_file(path, out_dir, num_lines)
-
 def join_files_processor(out_dir, num_chunks, barcode):
     #Get the paths for the appropriate reads for each chunk
     barcode_paths = [os.path.join(out_dir, str(chunk_number), BARCODE_FILE_PREFIX + str(barcode)) for chunk_number in xrange(num_chunks)]
@@ -184,51 +186,6 @@ def join_files_processor(out_dir, num_chunks, barcode):
     for path in barcode_paths:
         if not os.path.exists(path): continue
         os.remove(path)
-
-def sort_barcodes_with_split(forward_path, reverse_path, out_dir, num_lines=6e7, skip_split=False):
-    # Split files. Decrease num_lines to increase the number of jobs into which the
-    # task is split. The more jobs created, the more overhead needed to open file streams.
-    print("Splitting files...")
-    if not os.path.exists(out_dir):
-        os.mkdir(out_dir)
-    splits_1 = os.path.join(out_dir, "split_1")
-    splits_2 = os.path.join(out_dir, "split_2")
-    if skip_split:
-        forward_paths = [os.path.join(splits_1, x) for x in sorted(os.listdir(splits_1)) if x[0] != "."]
-        reverse_paths = [os.path.join(splits_2, x) for x in sorted(os.listdir(splits_2)) if x[0] != "."]
-    else:
-        pool = multiprocessing.Pool(processes=2)
-        processor = partial(split_files_processor, num_lines) # Number of lines per file - must be 0 mod 4
-        #Input, output pairs for each splitting job
-        split_args = [(forward_path, splits_1), (reverse_path, splits_2)]
-        forward_paths, reverse_paths = pool.map(processor, split_args)
-
-    #Process files
-    input_items = [(i, forward_paths[i], reverse_paths[i]) for i in range(len(forward_paths))]
-
-    print("Processing files ({} chunks)...".format(len(input_items)))
-    pool = multiprocessing.Pool(processes=NUM_PROCESSES)
-    processor = partial(sort_barcodes_processor, out_dir)
-    # Synchronous equivalent:
-    #map(processor, input_items)
-    result = pool.imap(processor, input_items)
-    pool.close()
-    pool.join()
-
-    print("Joining files...")
-    pool = multiprocessing.Pool(processes=NUM_PROCESSES)
-    processor = partial(join_files_processor, out_dir, len(input_items))
-    pool.map(processor, range(len(index_codes) * len(barcodes)))
-
-    print("Cleaning up...")
-    paths_to_delete = [splits_1, splits_2] + [os.path.join(out_dir, str(i)) for i in xrange(len(input_items))]
-    for path in paths_to_delete:
-        if os.path.exists(path):
-            print("Deleting {}".format(path))
-            shutil.rmtree(path)
-    print("Done.")
-
-### Streaming Implementation
 
 class StreamingSortWorker(object):
     '''
@@ -247,7 +204,7 @@ class StreamingSortWorker(object):
         self.is_working = True
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
-        sort_sequence_reads(forward_input, reverse_input, self.out_dir)
+        sort_sequence_reads(forward_input, reverse_input, self.out_dir, append=True)
         if delete_on_complete:
             os.remove(forward_input)
             os.remove(reverse_input)
@@ -257,8 +214,6 @@ class StreamingSortWorker(object):
 available_chunk_files = []
 
 def streaming_work_supplier(lock, streams, split_dirs, num_lines, num_chunk_files):
-    '''
-    '''
     global available_chunk_files
     # Write the chunks
     forward_stream, reverse_stream = streams
@@ -347,6 +302,7 @@ if __name__ == '__main__':
         num_lines = int(sys.argv[4])
     else:
         num_lines = 2e7
-    sort_barcodes_streaming(in_path_1, in_path_2, out_dir, num_lines=40000)
+    #sort_barcodes_streaming(in_path_1, in_path_2, out_dir, num_lines=40000)
+    sort_sequence_reads(in_path_1, in_path_2, out_dir)
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
