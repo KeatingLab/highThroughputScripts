@@ -11,6 +11,7 @@ from itertools import izip
 import multiprocessing, threading
 from functools import partial
 import time
+from cStringIO import StringIO
 
 index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
                 "CAGATC","ACTTGA","GATCAG"]
@@ -25,11 +26,11 @@ BARCODE_FILE_PREFIX = "barcode_"
 
 NUM_PROCESSES = 15
 
-def sort_sequence_reads(forward_path, reverse_path, out_dir):
-    records_forward = SeqIO.parse(open(forward_path, "rU"), FORMAT)
-    records_reverse = SeqIO.parse(open(reverse_path, "rU"), FORMAT)
+def sort_sequence_reads(forward_file, reverse_file, out_dir, append=False):
+    records_forward = SeqIO.parse(forward_file, FORMAT)
+    records_reverse = SeqIO.parse(reverse_file, FORMAT)
 
-    output_streams = open_output_streams(out_dir, BARCODE_FILE_PREFIX, len(index_codes) * len(barcodes))
+    output_streams = open_output_streams(out_dir, BARCODE_FILE_PREFIX, len(index_codes) * len(barcodes), append)
 
     for (forward, reverse) in izip(records_forward, records_reverse):
         barcode_number = get_barcode_number(forward, reverse)
@@ -42,8 +43,8 @@ def sort_sequence_reads(forward_path, reverse_path, out_dir):
 
     return 1
 
-def open_output_streams(out_dir, prefix, num_files):
-    return [open(os.path.join(out_dir, prefix + str(i)), "w") for i in xrange(num_files)]
+def open_output_streams(out_dir, prefix, num_files, append=False):
+    return [open(os.path.join(out_dir, prefix + str(i)), "a" if append else "w") for i in xrange(num_files)]
 
 def close_output_streams(streams):
     for stream in streams:
@@ -151,6 +152,20 @@ def write_file_chunk(file, output, num_lines):
             line_count += 1
     return False
 
+def load_file_chunk(file, num_lines):
+    '''
+    Returns the next chunk of the file stream.
+    '''
+    line_count = 0
+    ret = ""
+    while line_count < num_lines:
+        line = file.readline()
+        if len(line) == 0:
+            break
+        ret += line
+        line_count += 1
+    return ret
+
 def join_files(file_paths, out_file):
     '''
     Concatenates the files at the given paths into the file at out_file.
@@ -171,7 +186,9 @@ def sort_barcodes_processor(out_dir, input_info):
     chunk_out_dir = os.path.join(out_dir, str(i))
     if not os.path.exists(chunk_out_dir):
         os.mkdir(chunk_out_dir)
-    sort_sequence_reads(test_1, test_2, chunk_out_dir)
+    with open(test_1, "rU") as file_1:
+        with open(test_2, "rU") as file_2:
+            sort_sequence_reads(file_1, file_2, chunk_out_dir)
 
 def split_files_processor(num_lines, input_info):
     path, out_dir = input_info
@@ -247,10 +264,21 @@ class StreamingSortWorker(object):
         self.is_working = True
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
-        sort_sequence_reads(forward_input, reverse_input, self.out_dir)
+        with open(forward_input, "rU") as forward_file:
+            with open(reverse_input, "rU") as reverse_file:
+                sort_sequence_reads(forward_file, reverse_file, self.out_dir, append=True)
         if delete_on_complete:
             os.remove(forward_input)
             os.remove(reverse_input)
+        self.is_working = False
+        self.thread = None
+
+    def sort_in_memory(self, forward_data, reverse_data):
+        self.thread = threading.current_thread()
+        self.is_working = True
+        if not os.path.exists(self.out_dir):
+            os.mkdir(self.out_dir)
+        sort_sequence_reads(StringIO(forward_data), StringIO(reverse_data), self.out_dir, append=True)
         self.is_working = False
         self.thread = None
 
@@ -271,17 +299,19 @@ def streaming_work_supplier(lock, streams, split_dirs, num_lines, num_chunk_file
             print("Transferring chunk {}...".format(chunk_number))
             forward_path = os.path.join(split_dirs[0], str(chunk_number))
             reverse_path = os.path.join(split_dirs[1], str(chunk_number))
-            finished_1 = write_file_chunk(forward_stream, forward_path, num_lines)
-            finished_2 = write_file_chunk(reverse_stream, reverse_path, num_lines)
+            chunk_1 = load_file_chunk(forward_stream, num_lines)
+            chunk_2 = load_file_chunk(reverse_stream, num_lines)
             with lock:
-                available_chunk_files.append((forward_path, reverse_path))
+                available_chunk_files.append((chunk_1, chunk_2))
 
             chunk_number += 1
+            finished_1 = len(chunk_1) == 0
+            finished_2 = len(chunk_2) == 0
             if finished_1 or finished_2:
                 print("Finished reading chunks.")
                 return
 
-def sort_barcodes_streaming(forward_path, reverse_path, out_dir, num_lines=6e7, num_threads=4):
+def sort_barcodes_streaming(forward_path, reverse_path, out_dir, num_lines=6e7, num_threads=3):
     '''
     The idea behind the streaming version is to transfer chunks of size num_lines
     into temporary files, then hand them to worker threads to sort. Each worker
@@ -310,10 +340,9 @@ def sort_barcodes_streaming(forward_path, reverse_path, out_dir, num_lines=6e7, 
                     forward, reverse = available_chunk_files.pop(0)
 
                 # Spawn a worker thread
-                print("Starting chunk {}...".format(os.path.basename(forward)))
-                worker_thread = threading.Thread(target=worker.sort, args=(forward, reverse))
+                worker_thread = threading.Thread(target=worker.sort_in_memory, args=(forward, reverse))
                 worker_thread.start()
-        time.sleep(1)
+        #time.sleep(1)
 
     for worker in workers:
         if worker.thread is not None:
@@ -347,6 +376,6 @@ if __name__ == '__main__':
         num_lines = int(sys.argv[4])
     else:
         num_lines = 2e7
-    sort_barcodes_streaming(in_path_1, in_path_2, out_dir, num_lines=40000)
+    sort_barcodes_streaming(in_path_1, in_path_2, out_dir, num_lines=4000)
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
