@@ -3,6 +3,7 @@
 from Bio import SeqIO,Seq
 import multiprocessing
 import sys, os
+from itertools import izip
 
 '''
 This code is a little difficult
@@ -99,8 +100,7 @@ def processFile(input_path,dirName, barcode):
     print("COMPLETE!")
 
 def pairIterator(records):
-    for pair1,pair2 in zip(records,records):
-        yield (pair1,pair2)
+    return izip(records, records)
 
 def writeToFile(q, dirName,barcode):
     '''listens for messages on the q, writes to file. '''
