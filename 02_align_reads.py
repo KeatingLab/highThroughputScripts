@@ -19,6 +19,20 @@ SEQUENCE_QUALITY_KEY = 'phred_quality'
 UNSPECIFIED_BASE = 'N'
 
 '''
+These determine how statistics are collected when the --stats parameter is set.
+The output will be in CSV format with three elements per row:
+
+* The first number is a quality threshold (n / 10 gives the negative log probability
+of a sequencing error).
+* The second number is the number of bases that are allowed to fall below the
+quality threshold.
+* The third number is the number of reads that would pass the given threshold and
+tolerance.
+'''
+STAT_CUTOFFS = [0, 1, 2, 3, 5, 10, 20]
+STAT_QUALITY_BINS = xrange(0, 40, 5)
+
+'''
 The references are the sequences onto which the forward and reverse reads will be
 scaffolded. The output will be indexed by the number of the reference to which
 each read was aligned.
@@ -249,7 +263,7 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
 def combine_records_processor(references, (forward, reverse), threshold=0, **kwargs):
     '''
     Performs initial quality check and passes through to the main combine_records
-    function. Returns (reference, dna_sequence, aa_sequence, quality), where reference
+    function. Returns (input, reference, dna_sequence, aa_sequence, quality), where reference
     is the index of the used reference. If an alignment was not computed because of
     bad quality, reference will be -1.
     '''
@@ -259,7 +273,15 @@ def combine_records_processor(references, (forward, reverse), threshold=0, **kwa
     if len(dna_sequence) == 0:
         return -1, None, None, None
     aa_sequence = str(Seq.Seq(dna_sequence).translate())
-    return reference, dna_sequence, aa_sequence, quality
+    return (forward, reverse), reference, dna_sequence, aa_sequence, quality
+
+def update_quality_stats(quality_dict, record):
+    quality_list = record.letter_annotations[SEQUENCE_QUALITY_KEY] if type(record) == SeqIO.SeqRecord else record
+    stats = quality_stats(quality_list, STAT_CUTOFFS)
+    for cutoff, stat in izip(STAT_CUTOFFS, stats):
+        for quality in STAT_QUALITY_BINS:
+            if quality > stat: break
+            quality_dict[quality][cutoff] += 1
 
 def write_combined_records(input_path, references, out_dir, num_processes=15, threshold=0, stats=False):
     '''
@@ -284,38 +306,25 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
         if not os.path.exists(stats_path):
             os.mkdir(stats_path)
 
+    # Open file streams
     dna_files = [open(os.path.join(dna_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
     aa_files = [open(os.path.join(aa_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
     qual_files = [open(os.path.join(qual_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
 
     if stats:
-        cutoffs = [0, 1, 2, 3, 5, 10, 20]
-        quality_bins = xrange(0, 40, 5)
-        forward_quality_stats = {cutoff: {qual: 0 for qual in quality_bins} for cutoff in cutoffs}
-        reverse_quality_stats = {cutoff: {qual: 0 for qual in quality_bins} for cutoff in cutoffs}
-        total_quality_stats = {cutoff: {qual: 0 for qual in quality_bins} for cutoff in cutoffs}
+        # Initialize statistics bookkeeping
+        forward_quality_stats = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
+        reverse_quality_stats = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
+        total_quality_stats = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
 
     with open(input_path, 'rU') as file:
 
         records = SeqIO.parse(file, FORMAT)
 
-        if stats:
-            for forward, reverse in izip(records, records):
-                stats = quality_stats(forward.letter_annotations[SEQUENCE_QUALITY_KEY], cutoffs)
-                for cutoff, stat in izip(cutoffs, stats):
-                    forward_quality_stats[cutoff][int(math.floor(stat / 5) * 5)] += 1
-
-                stats = quality_stats(reverse.letter_annotations[SEQUENCE_QUALITY_KEY], cutoffs)
-                for cutoff, stat in izip(cutoffs, stats):
-                    reverse_quality_stats[cutoff][int(math.floor(stat / 5) * 5)] += 1
-
-            write_quality_stats(forward_quality_stats, os.path.join(out_dir, "stats", basename + "_forward.txt"))
-            write_quality_stats(reverse_quality_stats, os.path.join(out_dir, "stats", basename + "_reverse.txt"))
-
         pool = multiprocessing.Pool(processes=num_processes)
         processor = partial(combine_records_processor, references, threshold=threshold, min_overlap=10, max_overlap=30)
         for result in map(processor, izip(records, records)): #pool.imap(processor, izip(records, records), chunksize=1000):
-            ref_index, dna_sequence, aa_sequence, quality = result
+            original_input, ref_index, dna_sequence, aa_sequence, quality = result
             if ref_index == -1:
                 continue
 
@@ -324,13 +333,16 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
             qual_files[ref_index].write(",".join([str(q) for q in quality]) + "\n")
 
             if stats:
-                stats = quality_stats(quality, cutoffs)
-                for cutoff, stat in izip(cutoffs, stats):
-                    total_quality_stats[cutoff][int(math.floor(stat / 5) * 5)] += 1
+                forward, reverse = original_input
+                update_quality_stats(forward_quality_stats, forward)
+                update_quality_stats(reverse_quality_stats, reverse)
+                update_quality_stats(total_quality_stats, quality)
 
     for file in dna_files + aa_files + qual_files:
         file.close()
     if stats:
+        write_quality_stats(forward_quality_stats, os.path.join(out_dir, "stats", basename + "_forward.txt"))
+        write_quality_stats(reverse_quality_stats, os.path.join(out_dir, "stats", basename + "_reverse.txt"))
         write_quality_stats(total_quality_stats, os.path.join(out_dir, "stats", basename + "_total.txt"))
 
 def write_quality_stats(quality_stats, out_path):
