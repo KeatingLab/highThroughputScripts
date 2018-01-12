@@ -402,7 +402,7 @@ if __name__ == '__main__':
     parser.set_defaults(stats=False)
     args = parser.parse_args()
 
-    write_combined_records(args.input, REFERENCES, args.output, num_processes=args.processes, threshold=args.threshold, stats=args.stats, output_ranges=OUTPUT_RANGES)
+    write_combined_records(args.input, REFERENCE_SEQUENCES, args.output, num_processes=args.processes, threshold=args.threshold, stats=args.stats, output_ranges=OUTPUT_RANGES)
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
