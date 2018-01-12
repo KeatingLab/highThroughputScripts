@@ -88,10 +88,10 @@ def processFile(input_path,dirName, barcode):
     writeListener = pool.apply_async(writeToFile, (writeQueue,dirName,barcode))
 
 
-    myIt = pool.imap(func=getDNASeq,iterable=pairIterator(records),chunksize=1000)
-    #map(getDNASeq, pairIterator(records))
-    for each in myIt:
-        each
+    #myIt = pool.imap(func=getDNASeq,iterable=pairIterator(records),chunksize=1000)
+    map(getDNASeq, pairIterator(records))
+    #for each in myIt:
+    #    each
     print("Number of excessively-stacked alignments: {} number 'correct': {}".format(num_stacked, num_correct))
 
 
@@ -111,6 +111,7 @@ def writeToFile(q, dirName,barcode):
     print("Opened streams")
     while 1:
         res = q.get()
+        print("Getting")
         if res == 'kill':
             break
         #refIndex,extractedAA,fullDNA,str(extractedQuality)
@@ -134,9 +135,9 @@ def writeToFile(q, dirName,barcode):
 def passQuality(forwardRecord,reverseRecord):
     forward_Quality = forwardRecord.letter_annotations['phred_quality']
     reverse_Quality = reverseRecord.letter_annotations['phred_quality'][::-1]
-    for i in range(40):
-        if(forward_Quality[i]< 20 or reverse_Quality[i] < 20):
-            return False
+    #for i in range(40):
+    #    if(forward_Quality[i]< 20 or reverse_Quality[i] < 20):
+    #        return False
     return True
 
 def getAlignmentsForBestMatch(string1,string2):
@@ -381,9 +382,9 @@ def getDNAAndAA(forwardRecord,reverseRecord):
     #if(refIndex==1):
 
     #For debugging purposes - Uhash these 3 lines
-    #print( 'R',referenceShift+reference)
-    #print('+',forwardShift + forwardReads)
-    #print('-',reverseShift+ reverseReads)
+    print( 'R',referenceShift+reference)
+    print('+',forwardShift + forwardReads)
+    print('-',reverseShift+ reverseReads)
 
     #print(myExtractedQuality)
     #print('---------------------------------')

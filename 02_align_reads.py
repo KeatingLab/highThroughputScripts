@@ -47,6 +47,25 @@ setting.
 '''
 OUTPUT_RANGES = None
 
+'''
+Same conditions as OUTPUT_RANGES, except a list of lists where each list corresponds
+to one of the reference sequences. When a read is aligned to the reference sequence,
+only the given ranges of the reference sequence will be used to score the alignment.
+This is useful if leading or trailing regions are known to be varied.
+'''
+REFERENCE_SCORING_RANGES = None
+
+'''
+The maximum number of bases longer or shorter the alignment can be from the
+reference before the read is discarded. For instance, if MAX_LENGTH_DELTA was 5,
+the following alignment would be discarded:
+
+ref: AAAAAAAAAAAAAAA****** <- more than 5 bases extra
+fwd:         BBBBBBBB*****
+rev:             CCCCCCCCC
+'''
+MAX_LENGTH_DELTA = 0
+
 class Aligner(object):
     '''
     Performs general alignment tasks, such as pairwise alignment, scoring,
@@ -60,7 +79,18 @@ class Aligner(object):
         self.gap_score = gap_score
         self.gap_character = gap_character
 
-    def score(self, sequence_1, sequence_2, offset):
+    def scoring_map(self, length, ranges):
+        '''
+        From the given length and list of range tuples, returns a list of boolean values
+        that indicate whether or not to use the base at each index in scoring.
+        '''
+        ret = [False for _ in xrange(length)]
+        for start, end in ranges:
+            for i in xrange(start, end):
+                ret[i] = True
+        return ret
+
+    def score(self, sequence_1, sequence_2, offset, scoring_map_1=None, scoring_map_2=None):
         '''
         Scores the alignment where sequence_2 is shifted by offset to the right
         of the start of sequence_1.
@@ -70,7 +100,9 @@ class Aligner(object):
         if offset < 0:
             total += -offset * self.gap_score
         for i, base_1 in enumerate(sequence_1):
-            if i - offset < 0 or i - offset >= len(sequence_2):
+            if (scoring_map_1 is not None and not scoring_map_1[i]) or (scoring_map_2 is not None and not scoring_map_2[i - offset]):
+                total += self.gap_score
+            elif i - offset < 0 or i - offset >= len(sequence_2):
                 total += self.gap_score
             else:
                 base_2 = sequence_2[i - offset]
@@ -131,6 +163,17 @@ class Aligner(object):
                 break
         return rets
 
+    def length(self, *sequences):
+        '''
+        Takes tuples of the form (sequence, offset) and returns the total length
+        of the alignment.
+        '''
+        if len(sequences) == 0: return 0
+        min_offset = min(sequences, key=lambda x: x[1])[1]
+        rescaled_sequences = [(sequence, offset - min_offset) for sequence, offset in sequences]
+
+        return max(offset + len(sequence) for sequence, offset in rescaled_sequences)
+
     def enumerate(self, sequence_1, sequence_2, offset, placeholder=None):
         '''
         Enumerates the alignment specified by offset and yields a tuple (base_1, base_2)
@@ -174,10 +217,14 @@ class Aligner(object):
             if added_element:
                 yield item
 
-    def align(self, sequence_1, sequence_2, min_overlap=-1, max_overlap=-1, unidirectional=False, reverse=False):
+    def align(self, sequence_1, sequence_2, min_overlap=-1, max_overlap=-1, unidirectional=False, reverse=False, scoring_ranges=None):
         '''
         If unidirectional is True, then sequence_2 will be forced to start at or
         after the start of sequence_1.
+
+        If scoring_ranges is not None, it should be a tuple (ranges_1, ranges_2)
+        where each element is a list of ranges of bases that should be scored, for
+        sequence_1 and sequence_2, respectively.
         '''
         offset_range = xrange(0 if unidirectional else -len(sequence_2) + 1, len(sequence_1))
         if reverse:
@@ -185,26 +232,39 @@ class Aligner(object):
 
         best_offset = 0
         best_score = NO_SCORE
+
+        scoring_map_1 = None
+        scoring_map_2 = None
+        if scoring_ranges is not None:
+            if scoring_ranges[0] is not None:
+                scoring_map_1 = self.scoring_map(len(sequence_1), scoring_ranges[0])
+            if scoring_ranges[1] is not None:
+                scoring_map_2 = self.scoring_map(len(sequence_2), scoring_ranges[1])
+
         for offset in offset_range:
             overlap = self.overlap(sequence_1, sequence_2, offset)
             if (min_overlap >= 0 and overlap < min_overlap) or (max_overlap >= 0 and overlap > max_overlap):
                 continue
-            score = self.score(sequence_1, sequence_2, offset)
+            score = self.score(sequence_1, sequence_2, offset, scoring_map_1=scoring_map_1, scoring_map_2=scoring_map_2)
             if score != NO_SCORE and score > best_score:
                 best_score = score
                 best_offset = offset
         return (best_offset, best_score)
 
-    def best_alignment(self, target, sequences, **kwargs):
+    def best_alignment(self, target, sequences, candidate_scoring_ranges=None, **kwargs):
         '''
         Returns (best_sequence_index, best_offset, best_score), where best_sequence_index
         is the index of the sequence in `sequences` that results in the best
-        alignment with the target. Any optional arguments are passed through to
-        the `align` function.
+        alignment with the target. If candidate_scoring_ranges is not None, it should be
+        a list of scoring ranges for each sequence in `sequences`. Any other
+        optional arguments are passed through to the `align` function.
         '''
-        results = [[i] + list(self.align(sequence, target, **kwargs)) for i, sequence in enumerate(sequences)]
+        if candidate_scoring_ranges is None:
+            candidate_scoring_ranges = [None for i in xrange(len(sequences))]
+        results = [[i] + list(self.align(sequence, target, scoring_ranges=(candidate_scoring_ranges[i], None), **kwargs)) for i, sequence in enumerate(sequences)]
         return max(results, key=lambda x: x[2])
 
+### Helper functions
 
 def is_quality_read(record, threshold=20, allowable_misreads=0):
     '''
@@ -223,7 +283,7 @@ def quality_stats(qualities, cutoffs=[0, 2, 4, 6, 10]):
     sorted_qualities = sorted(qualities)
     return list(map(lambda x: sorted_qualities[x], cutoffs))
 
-def combine_records(forward_record, reverse_record, reference_sequences, min_overlap=-1, max_overlap=-1):
+def combine_records(forward_record, reverse_record, reference_sequences, min_overlap=-1, max_overlap=-1, max_length_delta=1e30, reference_scoring_ranges=None):
     '''
     Computes the alignments of both forward and reverse reads to the reference
     sequences. Synthesizes those alignments, using the better-quality read in
@@ -239,19 +299,35 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
     forward_str = str(forward_record.seq)
     reverse_str = str(reverse_record.seq.reverse_complement())
 
-    reference_index, forward_offset, forward_score = aligner.best_alignment(forward_str, reference_sequences, unidirectional=True, min_overlap=len(forward_str))
-    reverse_offset, _ = aligner.align(forward_str, reverse_str, unidirectional=True, reverse=True, min_overlap=10, max_overlap=30)
-    reverse_offset += forward_offset # Accounts for alignment to reference
+    reference_index, forward_offset, forward_score = aligner.best_alignment(forward_str, reference_sequences, unidirectional=True, min_overlap=len(forward_str), candidate_scoring_ranges=reference_scoring_ranges)
+    reverse_offset, _ = aligner.align(forward_str, reverse_str, unidirectional=True, reverse=True, min_overlap=min_overlap, max_overlap=max_overlap)
     reference = reference_sequences[reference_index]
+    reference_scoring_range = reference_scoring_ranges[reference_index] if reference_scoring_ranges is not None else None
+
+    reverse_offset_to_ref, reverse_score = aligner.align(reference, reverse_str, unidirectional=True, reverse=True, min_overlap=15, scoring_ranges=(reference_scoring_range, None))
+    # Compare the pairwise scores of obeying the forward and obeying the reverse alignments to reference,
+    # and adjust the alignment offsets accordingly.
+    if reverse_score > forward_score:
+        forward_offset = reverse_offset_to_ref - reverse_offset
+        reverse_offset = reverse_offset_to_ref
+    else:
+        reverse_offset += forward_offset
 
     combined_sequence = ""
     combined_quality = []
 
+    alignment_set = [(reference, 0), (forward_str, forward_offset), (reverse_str, reverse_offset)]
+    # Uncomment to print the resulting alignments
+    # print('\n'.join(aligner.format_multiple(*alignment_set)))
+
+    # Discard the read if total length is too different from reference length
+    if max_length_delta <= len(reference):
+        if math.fabs(aligner.length(*alignment_set) - len(reference)) > max_length_delta:
+            return -1, None, None
+
     # The aligner will enumerate the aligned characters or elements of each iterable we give it.
     # Zipping generators for both the sequence and the quality allows us to enumerate them together.
-    sequence_generator = aligner.enumerate_multiple((reference, 0),
-                                                    (forward_str, forward_offset),
-                                                    (reverse_str, reverse_offset))
+    sequence_generator = aligner.enumerate_multiple(*alignment_set)
     quality_generator = aligner.enumerate_multiple(([None for i in xrange(len(reference))], 0),
                                                    (forward_record.letter_annotations[SEQUENCE_QUALITY_KEY], forward_offset),
                                                    (reverse_record.letter_annotations[SEQUENCE_QUALITY_KEY], reverse_offset))
@@ -288,10 +364,10 @@ def combine_records_processor(references, (forward, reverse), threshold=0, outpu
     sequence to ensure correct translation.)
     '''
     if not is_quality_read(forward, threshold=threshold) or not is_quality_read(reverse, threshold=threshold):
-        return -1, None, None, None
+        return (forward, reverse), -1, None, None, None
     reference, dna_sequence, quality = combine_records(forward, reverse, references, **kwargs)
-    if len(dna_sequence) == 0:
-        return -1, None, None, None
+    if reference == -1 or len(dna_sequence) == 0:
+        return (forward, reverse), -1, None, None, None
 
     if output_ranges is not None:
         start, end = output_ranges[reference]
@@ -300,6 +376,8 @@ def combine_records_processor(references, (forward, reverse), threshold=0, outpu
 
     aa_sequence = str(Seq.Seq(dna_sequence).translate())
     return (forward, reverse), reference, dna_sequence, aa_sequence, quality
+
+### Quality stats
 
 def update_quality_stats(quality_dict, record):
     '''
@@ -313,12 +391,25 @@ def update_quality_stats(quality_dict, record):
             if quality > stat: break
             quality_dict[quality][cutoff] += 1
 
-def write_combined_records(input_path, references, out_dir, num_processes=15, threshold=0, stats=False, output_ranges=None):
+def write_quality_stats(quality_stats, out_path):
+    with open(out_path, "w") as stats_file:
+        for cutoff in sorted(quality_stats.keys()):
+            for quality in sorted(quality_stats[cutoff].keys()):
+                stats_file.write(",".join([str(cutoff), str(quality), str(quality_stats[cutoff][quality])]) + "\n")
+
+### Main function
+
+def write_combined_records(input_path, references, out_dir, num_processes=15, threshold=0, stats=False, output_ranges=None, min_overlap=10, max_overlap=30, max_length_delta=1e30, reference_scoring_ranges=None):
     '''
     Combines the records at input_path by aligning them to the given reference sequences,
     and saves them to the appropriate locations within out_dir. The combined DNA
     sequences are written to out_dir/dnaframe, the amino acid sequences are
     written to out_dir/seqframe, and the qualities are written to qualframe (as CSV).
+
+    min_overlap and max_overlap specify conditions for the overlap between the
+    forward and reverse reads. max_length_delta is the maximum absolute difference
+    between the reference and the reads aligned to the reference.
+
     '''
     basename = os.path.basename(input_path)
 
@@ -356,8 +447,10 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
                             references,
                             threshold=threshold,
                             output_ranges=output_ranges,
-                            min_overlap=10,
-                            max_overlap=30)
+                            min_overlap=min_overlap,
+                            max_overlap=max_overlap,
+                            max_length_delta=max_length_delta,
+                            reference_scoring_ranges=reference_scoring_ranges)
         for result in pool.imap(processor, izip(records, records), chunksize=1000):
             original_input, ref_index, dna_sequence, aa_sequence, quality = result
             if ref_index == -1:
@@ -380,12 +473,6 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
         write_quality_stats(reverse_quality_stats, os.path.join(out_dir, "stats", basename + "_reverse.txt"))
         write_quality_stats(total_quality_stats, os.path.join(out_dir, "stats", basename + "_total.txt"))
 
-def write_quality_stats(quality_stats, out_path):
-    with open(out_path, "w") as stats_file:
-        for cutoff in sorted(quality_stats.keys()):
-            for quality in sorted(quality_stats[cutoff].keys()):
-                stats_file.write(",".join([str(cutoff), str(quality), str(quality_stats[cutoff][quality])]) + "\n")
-
 if __name__ == '__main__':
     a = time.time()  # Time the script started
     parser = argparse.ArgumentParser(description='Reads a single barcode file containing pairs of forward and reverse reads, and aligns them to a set of possible scaffolds (defined at the top of this script). Writes the results to three directories, containing the DNA sequence, the AA sequence, and the quality scores, respectively.')
@@ -402,7 +489,15 @@ if __name__ == '__main__':
     parser.set_defaults(stats=False)
     args = parser.parse_args()
 
-    write_combined_records(args.input, REFERENCE_SEQUENCES, args.output, num_processes=args.processes, threshold=args.threshold, stats=args.stats, output_ranges=OUTPUT_RANGES)
+    write_combined_records(args.input,
+                           REFERENCE_SEQUENCES,
+                           args.output,
+                           num_processes=args.processes,
+                           threshold=args.threshold,
+                           stats=args.stats,
+                           output_ranges=OUTPUT_RANGES,
+                           max_length_delta=MAX_LENGTH_DELTA,
+                           reference_scoring_ranges=REFERENCE_SCORING_RANGES)
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))

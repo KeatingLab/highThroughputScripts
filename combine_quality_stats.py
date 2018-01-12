@@ -8,6 +8,8 @@ for 02_align_reads.py.
 import os
 import argparse
 
+SEPARATOR = '\t'
+
 def combine_quality_stats(input_dir, marker, out_dir):
     quality_information = {}
     for path in os.listdir(input_dir):
@@ -38,7 +40,7 @@ def write_quality_information(quality_dict, file, prefix=[]):
         if type(quality_dict[key]) == dict:
             write_quality_information(quality_dict[key], file, prefix + [key])
         else:
-            file.write(','.join(prefix + [str(quality_dict[key])]) + '\n')
+            file.write(SEPARATOR.join(prefix + [key, str(quality_dict[key])]) + '\n')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Concatenates the statistics written by the alignment script into single files based on their suffixes (e.g. forward, reverse, total).')
