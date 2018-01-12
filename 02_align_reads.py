@@ -37,9 +37,22 @@ The references are the sequences onto which the forward and reverse reads will b
 scaffolded. The output will be indexed by the number of the reference to which
 each read was aligned.
 '''
-references = ["ACTCGTCCCAAACAAGAACCTCAGGAAATCGATTTCCCGGACGATCTGCCAAACGACTTATCACG"]
+REFERENCE_SEQUENCES = ["ACTCGTCCCAAACAAGAACCTCAGGAAATCGATTTCCCGGACGATCTGCCAAACGACTTATCACG"]
+
+'''
+If OUTPUT_RANGES is not None, it should be a list with the same length as
+REFERENCE_SEQUENCES. When a pair of reads is aligned to one of the reference
+sequences, the sequence that is output will be trimmed to the range given by this
+setting.
+'''
+OUTPUT_RANGES = None
 
 class Aligner(object):
+    '''
+    Performs general alignment tasks, such as pairwise alignment, scoring,
+    formatting, and iterating.
+    '''
+
     def __init__(self, mutation_threshold=-1, identical_score=1, different_score=-1, gap_score=0, gap_character=" "):
         self.mutation_threshold = mutation_threshold
         self.identical_score = identical_score
@@ -233,13 +246,15 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
 
     combined_sequence = ""
     combined_quality = []
+
+    # The aligner will enumerate the aligned characters or elements of each iterable we give it.
+    # Zipping generators for both the sequence and the quality allows us to enumerate them together.
     sequence_generator = aligner.enumerate_multiple((reference, 0),
                                                     (forward_str, forward_offset),
                                                     (reverse_str, reverse_offset))
     quality_generator = aligner.enumerate_multiple(([None for i in xrange(len(reference))], 0),
                                                    (forward_record.letter_annotations[SEQUENCE_QUALITY_KEY], forward_offset),
                                                    (reverse_record.letter_annotations[SEQUENCE_QUALITY_KEY], reverse_offset))
-
     for bases, qualities in izip(sequence_generator, quality_generator):
         _, forward_base, reverse_base = bases
         _, forward_quality, reverse_quality = qualities
@@ -260,22 +275,37 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
 
     return reference_index, combined_sequence, combined_quality
 
-def combine_records_processor(references, (forward, reverse), threshold=0, **kwargs):
+def combine_records_processor(references, (forward, reverse), threshold=0, output_ranges=None, **kwargs):
     '''
     Performs initial quality check and passes through to the main combine_records
     function. Returns (input, reference, dna_sequence, aa_sequence, quality), where reference
     is the index of the used reference. If an alignment was not computed because of
     bad quality, reference will be -1.
+
+    If output_ranges is not None, its element corresponding to the chosen reference
+    sequence will define the range of bases in the scaffolding sequence that
+    should be output. (Note: it should match the reading frame of the coding
+    sequence to ensure correct translation.)
     '''
     if not is_quality_read(forward, threshold=threshold) or not is_quality_read(reverse, threshold=threshold):
         return -1, None, None, None
     reference, dna_sequence, quality = combine_records(forward, reverse, references, **kwargs)
     if len(dna_sequence) == 0:
         return -1, None, None, None
+
+    if output_ranges is not None:
+        start, end = output_ranges[reference]
+        dna_sequence = dna_sequence[start:end]
+        quality = quality[start:end]
+
     aa_sequence = str(Seq.Seq(dna_sequence).translate())
     return (forward, reverse), reference, dna_sequence, aa_sequence, quality
 
 def update_quality_stats(quality_dict, record):
+    '''
+    Helper function for write_combined_records that updates the given quality
+    dictionary with qualities provided in the given SeqRecord (or list) object.
+    '''
     quality_list = record.letter_annotations[SEQUENCE_QUALITY_KEY] if type(record) == SeqIO.SeqRecord else record
     stats = quality_stats(quality_list, STAT_CUTOFFS)
     for cutoff, stat in izip(STAT_CUTOFFS, stats):
@@ -283,7 +313,7 @@ def update_quality_stats(quality_dict, record):
             if quality > stat: break
             quality_dict[quality][cutoff] += 1
 
-def write_combined_records(input_path, references, out_dir, num_processes=15, threshold=0, stats=False):
+def write_combined_records(input_path, references, out_dir, num_processes=15, threshold=0, stats=False, output_ranges=None):
     '''
     Combines the records at input_path by aligning them to the given reference sequences,
     and saves them to the appropriate locations within out_dir. The combined DNA
@@ -322,8 +352,13 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
         records = SeqIO.parse(file, FORMAT)
 
         pool = multiprocessing.Pool(processes=num_processes)
-        processor = partial(combine_records_processor, references, threshold=threshold, min_overlap=10, max_overlap=30)
-        for result in map(processor, izip(records, records)): #pool.imap(processor, izip(records, records), chunksize=1000):
+        processor = partial(combine_records_processor,
+                            references,
+                            threshold=threshold,
+                            output_ranges=output_ranges,
+                            min_overlap=10,
+                            max_overlap=30)
+        for result in pool.imap(processor, izip(records, records), chunksize=1000):
             original_input, ref_index, dna_sequence, aa_sequence, quality = result
             if ref_index == -1:
                 continue
@@ -367,7 +402,7 @@ if __name__ == '__main__':
     parser.set_defaults(stats=False)
     args = parser.parse_args()
 
-    write_combined_records(args.input, references, args.output, num_processes=args.processes, threshold=args.threshold, stats=args.stats)
+    write_combined_records(args.input, REFERENCES, args.output, num_processes=args.processes, threshold=args.threshold, stats=args.stats, output_ranges=OUTPUT_RANGES)
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
