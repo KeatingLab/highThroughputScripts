@@ -90,7 +90,7 @@ class Aligner(object):
                 ret[i] = True
         return ret
 
-    def score(self, sequence_1, sequence_2, offset, scoring_map_1=None, scoring_map_2=None):
+    def score(self, sequence_1, sequence_2, offset, scoring_maps=None):
         '''
         Scores the alignment where sequence_2 is shifted by offset to the right
         of the start of sequence_1.
@@ -100,7 +100,7 @@ class Aligner(object):
         if offset < 0:
             total += -offset * self.gap_score
         for i, base_1 in enumerate(sequence_1):
-            if (scoring_map_1 is not None and not scoring_map_1[i]) or (scoring_map_2 is not None and not scoring_map_2[i - offset]):
+            if scoring_maps is not None and ((scoring_maps[0] is not None and not scoring_maps[0][i]) or (scoring_maps[1] is not None and not scoring_maps[1][i - offset])):
                 total += self.gap_score
             elif i - offset < 0 or i - offset >= len(sequence_2):
                 total += self.gap_score
@@ -233,19 +233,18 @@ class Aligner(object):
         best_offset = 0
         best_score = NO_SCORE
 
-        scoring_map_1 = None
-        scoring_map_2 = None
+        scoring_maps = [None, None]
         if scoring_ranges is not None:
             if scoring_ranges[0] is not None:
-                scoring_map_1 = self.scoring_map(len(sequence_1), scoring_ranges[0])
+                scoring_maps[0] = self.scoring_map(len(sequence_1), scoring_ranges[0])
             if scoring_ranges[1] is not None:
-                scoring_map_2 = self.scoring_map(len(sequence_2), scoring_ranges[1])
+                scoring_maps[1] = self.scoring_map(len(sequence_2), scoring_ranges[1])
 
         for offset in offset_range:
             overlap = self.overlap(sequence_1, sequence_2, offset)
             if (min_overlap >= 0 and overlap < min_overlap) or (max_overlap >= 0 and overlap > max_overlap):
                 continue
-            score = self.score(sequence_1, sequence_2, offset, scoring_map_1=scoring_map_1, scoring_map_2=scoring_map_2)
+            score = self.score(sequence_1, sequence_2, offset, scoring_maps=scoring_maps)
             if score != NO_SCORE and score > best_score:
                 best_score = score
                 best_offset = offset
