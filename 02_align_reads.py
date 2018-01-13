@@ -29,6 +29,11 @@ quality threshold.
 * The third number is the number of reads that would pass the given threshold and
 tolerance.
 '''
+STAT_FORWARD_KEY = "forward"
+STAT_REVERSE_KEY = "reverse"
+STAT_TOTAL_KEY = "total"
+STAT_TYPE_KEYS = [STAT_FORWARD_KEY, STAT_REVERSE_KEY, STAT_TOTAL_KEY]
+
 STAT_CUTOFFS = [0, 1, 2, 3, 5, 10, 20]
 STAT_QUALITY_BINS = xrange(0, 40, 5)
 
@@ -64,7 +69,7 @@ ref: AAAAAAAAAAAAAAA****** <- more than 5 bases extra
 fwd:         BBBBBBBB*****
 rev:             CCCCCCCCC
 '''
-MAX_LENGTH_DELTA = 0
+MAX_LENGTH_DELTA = 1e30
 
 class Aligner(object):
     '''
@@ -376,7 +381,7 @@ def combine_records_processor(references, (forward, reverse), threshold=0, outpu
     aa_sequence = str(Seq.Seq(dna_sequence).translate())
     return (forward, reverse), reference, dna_sequence, aa_sequence, quality
 
-### Quality stats
+### Stats
 
 def update_quality_stats(quality_dict, record):
     '''
@@ -395,6 +400,17 @@ def write_quality_stats(quality_stats, out_path):
         for cutoff in sorted(quality_stats.keys()):
             for quality in sorted(quality_stats[cutoff].keys()):
                 stats_file.write(",".join([str(cutoff), str(quality), str(quality_stats[cutoff][quality])]) + "\n")
+
+def update_length_diff_stats(length_diff_dict, reference, combined_dna):
+    delta = math.fabs(len(reference) - len(combined_dna))
+    for cutoff in sorted(length_diff_dict.keys()):
+        if delta <= cutoff:
+            length_diff_dict[cutoff] += 1
+
+def write_length_diff_stats(length_diff_dict, out_path):
+    with open(out_path, "w") as file:
+        for cutoff in sorted(length_diff_dict.keys()):
+            file.write("{},{}\n".format(cutoff, length_diff_dict[cutoff]))
 
 ### Main function
 
@@ -433,9 +449,10 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
 
     if stats:
         # Initialize statistics bookkeeping
-        forward_quality_stats = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
-        reverse_quality_stats = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
-        total_quality_stats = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
+        stats_dict = {}
+        for key in STAT_TYPE_KEYS:
+            stats_dict[key] = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
+        length_diff_dict = {cutoff: 0 for cutoff in STAT_CUTOFFS}
 
     with open(input_path, 'rU') as file:
 
@@ -461,16 +478,19 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
 
             if stats:
                 forward, reverse = original_input
-                update_quality_stats(forward_quality_stats, forward)
-                update_quality_stats(reverse_quality_stats, reverse)
-                update_quality_stats(total_quality_stats, quality)
+                update_quality_stats(stats_dict[STAT_FORWARD_KEY], forward)
+                update_quality_stats(stats_dict[STAT_REVERSE_KEY], reverse)
+                update_quality_stats(stats_dict[STAT_TOTAL_KEY], quality)
+                update_length_diff_stats(length_diff_dict, references[ref_index], dna_sequence)
+
 
     for file in dna_files + aa_files + qual_files:
         file.close()
     if stats:
-        write_quality_stats(forward_quality_stats, os.path.join(out_dir, "stats", basename + "_forward.txt"))
-        write_quality_stats(reverse_quality_stats, os.path.join(out_dir, "stats", basename + "_reverse.txt"))
-        write_quality_stats(total_quality_stats, os.path.join(out_dir, "stats", basename + "_total.txt"))
+        write_quality_stats(stats_dict[STAT_FORWARD_KEY], os.path.join(out_dir, "stats", basename + "_forward.txt"))
+        write_quality_stats(stats_dict[STAT_REVERSE_KEY], os.path.join(out_dir, "stats", basename + "_reverse.txt"))
+        write_quality_stats(stats_dict[STAT_TOTAL_KEY], os.path.join(out_dir, "stats", basename + "_total.txt"))
+        write_length_diff_stats(length_diff_dict, os.path.join(out_dir, "stats", basename + "_length_deltas.txt"))
 
 if __name__ == '__main__':
     a = time.time()  # Time the script started

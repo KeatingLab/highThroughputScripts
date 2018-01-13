@@ -50,7 +50,7 @@ if __name__ == '__main__':
                         help='The path to the output directory')
     args = parser.parse_args()
 
-    markers = ['forward', 'reverse', 'total']
+    markers = ['forward', 'reverse', 'total', 'length_deltas']
     for marker in markers:
         print("Concatenating {} files...".format(marker))
         combine_quality_stats(args.input, marker, args.output)
