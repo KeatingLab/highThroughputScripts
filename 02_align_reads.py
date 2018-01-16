@@ -65,11 +65,11 @@ The maximum number of bases longer or shorter the alignment can be from the
 reference before the read is discarded. For instance, if MAX_LENGTH_DELTA was 5,
 the following alignment would be discarded:
 
-ref: AAAAAAAAAAAAAAA****** <- more than 5 bases extra
+ref: AAAAAAAAAAAAAAA******
 fwd:         BBBBBBBB*****
-rev:             CCCCCCCCC
+rev:             CCCCCCCCC <- more than 5 bases extra from reference
 '''
-MAX_LENGTH_DELTA = 1e30
+MAX_LENGTH_DELTA = 3
 
 class Aligner(object):
     '''
