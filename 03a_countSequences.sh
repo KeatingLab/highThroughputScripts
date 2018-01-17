@@ -1,6 +1,9 @@
 #!/bin/bash
-cd seqframe;
-mkdir summary;
-for each in `ls seqframe_*`;
-    do sort $each | uniq -c > summary/$each.smry;
+input=$1
+output=$2/seq_summary
+
+mkdir $output
+
+for each in `ls $input`;
+    do sort $input/$each | uniq -c > $output/$each.smry
 done
