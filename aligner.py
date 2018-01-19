@@ -3,6 +3,9 @@ Contains the Aligner class, which performs general alignment tasks such as
 pairwise alignment, scoring, formatting, and iterating.
 '''
 
+GENERIC_SEQUENCE_TOKEN = '.'
+VARIABLE_REGION_TOKEN = '*'
+NON_SCORED_TOKENS = set([GENERIC_SEQUENCE_TOKEN, VARIABLE_REGION_TOKEN])
 NO_SCORE = -1e30
 
 class Aligner(object):
@@ -43,6 +46,8 @@ class Aligner(object):
                 base_2 = sequence_2[i - offset]
                 if base_1 == base_2:
                     total += self.identical_score
+                elif base_1 in NON_SCORED_TOKENS or base_2 in NON_SCORED_TOKENS:
+                    pass
                 elif self.mutation_threshold < 0 or num_mutations < self.mutation_threshold:
                     total += self.different_score
                     num_mutations += 1
@@ -109,17 +114,17 @@ class Aligner(object):
 
         return max(offset + len(sequence) for sequence, offset in rescaled_sequences)
 
-    def enumerate(self, sequence_1, sequence_2, offset, placeholder=None):
+    def enumerate(self, sequence_1, sequence_2, offset):
         '''
         Enumerates the alignment specified by offset and yields a tuple (base_1, base_2)
-        for each position. One of the bases may be `placeholder` (or by default
-        the gap character) if only one sequence is present at a position.
+        for each position. One of the bases may be None if only one sequence is
+        present at a position.
 
         Note that the sequences can be lists or strings; for instance, to enumerate
         the quality scores for a given alignment, simply pass the lists of quality
         scores for sequence_1 and sequence_2.
         '''
-        for item in self.enumerate_multiple((sequence_1, 0), (sequence_2, offset), placeholder=placeholder):
+        for item in self.enumerate_multiple((sequence_1, 0), (sequence_2, offset)):
             yield item
 
     def enumerate_multiple(self, *sequences):
