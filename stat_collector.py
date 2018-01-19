@@ -1,6 +1,22 @@
 '''
 This script allows other Python scripts to easily collect and write statistics
 about their runs.
+
+Usage:
+>>> import stat_collector as sc
+
+To keep a counter:
+>>> sc.counter(1, "my_stat_group", "my_substat")
+
+To keep a count of unique objects:
+>>> sc.unique_counter(item, "my_stat_group", "my_unique_stat")
+
+To increment some or all of a list of keys:
+>>> sc.apply_counter(range(5), lambda x: 1 if my_value < x else 0, "my_stat_group")
+
+To write the statistics to a directory, where each file name is prefixed by
+'my_program':
+>>> sc.write("/my/path/to/output/stats", prefix="my_program")
 '''
 import os
 
@@ -90,6 +106,22 @@ def apply_counter(child_keys, amount_function, *path):
     for key in child_keys:
         counter(amount_function(key), *(list(path) + [key]))
 
+def _permute_apply_counter(child_key_lists, amount_function, path, prefix=[]):
+    if len(child_key_lists) == 1:
+        apply_counter(list(map(lambda x: tuple(prefix + [x]), child_key_lists[0])), amount_function, path)
+    elif len(child_key_lists) > 1:
+        for key in child_key_lists[0]:
+            _permute_apply_counter(child_key_lists[1:], amount_function, path, prefix + [key])
+
+def permute_apply_counter(child_key_lists, amount_function, *path):
+    '''
+    For each permutation of keys k = [a, b, ...] in the list of lists
+    child_key_lists, adds the amount given by amount_function to the child of the
+    object at path with list key k. amount_function should take this list key
+    as argument, and return an integer.
+    '''
+    _permute_apply_counter(child_key_lists, amount_function, path)
+
 def unique_counter(item, *path):
     '''
     Increments the counter at the given key path if the given item has not been
@@ -116,19 +148,19 @@ def fraction(amount, total_amount, *path):
         assert old_value is list and len(old_value) == 2, "Key path {} cannot be used as a fraction with current value {}".format("->".join(path), old_value)
         collector.set([old_value[0] + int(amount), old_value[1] + int(total_amount)], *path)
 
-def is_iterable(item):
+def _is_iterable(item):
     try:
         _ = iter(item)
     except:
         return False
     else:
-        return True
+        return type(item) is not str
 
-def format_item(value):
+def _format_item(value):
     collector = StatCollector()
     if type(value) is set:
         return str(len(value))
-    elif is_iterable(value):
+    elif _is_iterable(value):
         return collector.separator.join([str(x) for x in value])
     else:
         return str(value)
@@ -145,14 +177,14 @@ def write(out_dir, prefix="", statistics=None):
     collector = StatCollector()
     if statistics is None:
         statistics = collector.statistics
-    if any(not is_iterable(x) for x in statistics.values()):
+    if any(not _is_iterable(x) for x in statistics.values()):
         # Write this dictionary to file
         with open(os.path.join(out_dir, prefix + ".txt"), "w") as file:
             for key in sorted(statistics.keys()):
-                file.write(collector.separator.join([format_item(key), format_item(value)]) + '\n')
+                file.write(collector.separator.join([_format_item(key), _format_item(statistics[key])]) + '\n')
     else:
         for key in sorted(statistics.keys()):
-            write(out_dir, prefix + "_" + format_item(key), statistics[key])
+            write(out_dir, prefix + "_" + _format_item(key), statistics[key])
 
 def reset():
     '''

@@ -13,6 +13,7 @@ from functools import partial
 import time
 import argparse
 from aligner import Aligner
+import stat_collector as sc
 
 FORMAT = 'fastq-sanger'
 SEQUENCE_QUALITY_KEY = 'phred_quality'
@@ -32,7 +33,7 @@ tolerance.
 STAT_FORWARD_KEY = "forward"
 STAT_REVERSE_KEY = "reverse"
 STAT_TOTAL_KEY = "total"
-STAT_TYPE_KEYS = [STAT_FORWARD_KEY, STAT_REVERSE_KEY, STAT_TOTAL_KEY]
+STAT_LENGTH_DIFF_KEY = "length_deltas"
 
 STAT_CUTOFFS = [0, 1, 2, 3, 5, 10, 20]
 STAT_QUALITY_BINS = xrange(0, 40, 5)
@@ -172,55 +173,16 @@ def is_quality_read(record, threshold=20, allowable_misreads=0):
     misread_count = sum(1 for q in record.letter_annotations[SEQUENCE_QUALITY_KEY] if q < threshold)
     return misread_count <= allowable_misreads
 
-### Stats
-
-def quality_stats(qualities, cutoffs=[0, 2, 4, 6, 10]):
-    '''
-    Takes a list of quality values for a given sequence. Determines and returns
-    the minimum score when the given cutoff numbers of bad reads are excluded.
-    '''
-    sorted_qualities = sorted(qualities)
-    return list(map(lambda x: sorted_qualities[x], cutoffs))
-
-def update_quality_stats(quality_dict, record):
+def update_quality_stats(parent_key, record):
     '''
     Helper function for write_combined_records that updates the given quality
     dictionary with qualities provided in the given SeqRecord (or list) object.
     '''
-    quality_list = record.letter_annotations[SEQUENCE_QUALITY_KEY] if type(record) == SeqIO.SeqRecord else record
-    stats = quality_stats(quality_list, STAT_CUTOFFS)
-    for cutoff, stat in izip(STAT_CUTOFFS, stats):
-        for quality in STAT_QUALITY_BINS:
-            if quality > stat: break
-            quality_dict[quality][cutoff] += 1
-
-def write_quality_stats(quality_stats, out_path):
-    '''
-    Writes the quality cutoff stats as CSV.
-    '''
-    with open(out_path, "w") as stats_file:
-        for cutoff in sorted(quality_stats.keys()):
-            for quality in sorted(quality_stats[cutoff].keys()):
-                stats_file.write(",".join([str(cutoff), str(quality), str(quality_stats[cutoff][quality])]) + "\n")
-
-def update_length_diff_stats(length_diff_dict, reference, combined_dna):
-    '''
-    Increments the distribution of length differences in length_diff_dict by
-    comparing the lengths of the reference sequence and the combined DNA sequence.
-    '''
-    delta = math.fabs(len(reference) - len(combined_dna))
-    for cutoff in sorted(length_diff_dict.keys()):
-        if delta <= cutoff:
-            length_diff_dict[cutoff] += 1
-
-def write_length_diff_stats(length_diff_dict, out_path):
-    '''
-    Writes the differences in length between reference and aligned DNA sequences
-    as a CSV file.
-    '''
-    with open(out_path, "w") as file:
-        for cutoff in sorted(length_diff_dict.keys()):
-            file.write("{},{}\n".format(cutoff, length_diff_dict[cutoff]))
+    qualities = record.letter_annotations[SEQUENCE_QUALITY_KEY] if type(record) == SeqIO.SeqRecord else record
+    sorted_qualities = sorted(qualities)
+    # Increment every (q, c) statistic for which the minimum quality
+    # when the c worst bases are discarded is at least q.
+    sc.permute_apply_counter([STAT_QUALITY_BINS, STAT_CUTOFFS], lambda x: 1 if sorted_qualities[x[1]] >= x[0] else 0, parent_key)
 
 ### Main function
 
@@ -249,20 +211,11 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
             os.mkdir(path)
     if stats:
         stats_path = os.path.join(out_dir, "stats")
-        if not os.path.exists(stats_path):
-            os.mkdir(stats_path)
 
     # Open file streams
     dna_files = [open(os.path.join(dna_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
     aa_files = [open(os.path.join(aa_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
     qual_files = [open(os.path.join(qual_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
-
-    if stats:
-        # Initialize statistics bookkeeping
-        stats_dict = {}
-        for key in STAT_TYPE_KEYS:
-            stats_dict[key] = {qual: {cutoff: 0 for cutoff in STAT_CUTOFFS} for qual in STAT_QUALITY_BINS}
-        length_diff_dict = {cutoff: 0 for cutoff in STAT_CUTOFFS}
 
     with open(input_path, 'rU') as file:
 
@@ -289,19 +242,18 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
 
             if stats:
                 forward, reverse = original_input
-                update_quality_stats(stats_dict[STAT_FORWARD_KEY], forward)
-                update_quality_stats(stats_dict[STAT_REVERSE_KEY], reverse)
-                update_quality_stats(stats_dict[STAT_TOTAL_KEY], quality)
-                update_length_diff_stats(length_diff_dict, references[ref_index], dna_sequence)
+                update_quality_stats(STAT_FORWARD_KEY, forward)
+                update_quality_stats(STAT_REVERSE_KEY, reverse)
+                update_quality_stats(STAT_TOTAL_KEY, quality)
+
+                delta = math.fabs(len(references[ref_index]) - len(dna_sequence))
+                sc.apply_counter(STAT_CUTOFFS, lambda c: delta <= c, STAT_LENGTH_DIFF_KEY)
 
 
     for file in dna_files + aa_files + qual_files:
         file.close()
     if stats:
-        write_quality_stats(stats_dict[STAT_FORWARD_KEY], os.path.join(out_dir, "stats", basename + "_forward.txt"))
-        write_quality_stats(stats_dict[STAT_REVERSE_KEY], os.path.join(out_dir, "stats", basename + "_reverse.txt"))
-        write_quality_stats(stats_dict[STAT_TOTAL_KEY], os.path.join(out_dir, "stats", basename + "_total.txt"))
-        write_length_diff_stats(length_diff_dict, os.path.join(out_dir, "stats", basename + "_length_deltas.txt"))
+        sc.write(stats_path, prefix=basename)
 
 if __name__ == '__main__':
     a = time.time()  # Time the script started
@@ -310,11 +262,11 @@ if __name__ == '__main__':
                         help='The path to the FASTQ input file')
     parser.add_argument('output', metavar='O', type=str,
                         help='The path to the output directory')
-    parser.add_argument('-t', '--threshold', type=int, default='0',
+    parser.add_argument('-t', '--threshold', type=int, default=0,
                         help='The quality score below which reads should not be used (default 0)')
-    parser.add_argument('-m', '--misreads', type=int, default='0',
+    parser.add_argument('-m', '--misreads', type=int, default=0,
                         help='The number of allowable reads below the threshold score before the read is discarded')
-    parser.add_argument('-d', '--max-delta', dest='max_delta', type=int, default='1e30',
+    parser.add_argument('-d', '--max-delta', dest='max_delta', type=int, default=1e30,
                         help='The maximum difference in length between the reference and the combined DNA alignment (default none)')
     parser.add_argument('-p', '--processes', type=int, default=15,
                         help='The number of processes to use')
