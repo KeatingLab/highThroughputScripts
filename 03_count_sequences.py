@@ -6,11 +6,27 @@ from aligner import *
 
 OUTPUT_DELIMITER = '\t'
 STAT_SCORES = "discard_count"
+
 '''
 If the score of the alignment is less than the length of the template minus
 this amount, the sequence will be discarded.
 '''
 DISCARD_THRESHOLD = 2
+
+'''
+Provides the criteria by which the input file will be sorted. If the task is a
+tuple of integers (start, end), the script will search for the unique sequences
+at those positions in each sequence.
+
+If the task is a tuple of strings (template, output_template), the script will
+attempt to align the template to each sequence in the file. The positions that
+are denoted by VARIABLE_REGION_TOKEN in the output_template, which must be the
+same length as template, will be assembled as the unique string for that sequence.
+For example, if the sequence were ABCDEFGH, the template were AB**E*, and the
+output template were A*****, the returned generic sequence would be '.BCDEF'.
+'''
+SORTING_TASKS = [(VARIABLE_REGION_TOKEN * 27 + "CCGGACGATCTGCC", VARIABLE_REGION_TOKEN * 41),
+                 (-15, -6)]
 
 def count_unique_sequences(input_file, match_task, indexes=None):
     '''
@@ -24,14 +40,6 @@ def count_unique_sequences(input_file, match_task, indexes=None):
     of lines in the input. The return value in this case, will be a dictionary where
     each key is one of the values of the indexes list. The value at that key will
     be the unique sequences for all lines that have that given index value.
-
-    If match_task is a tuple of integers (start, end), this function searches for
-    matches at those positions in each sequence. If match_task is a tuple of
-    strings (template, output_template), this function attempts to align the
-    template to each sequence. The positions denoted by VARIABLE_REGION_TOKEN in
-    the output_template, which must be the same length as template, will be
-    assembled as the unique string for that sequence.
-
     '''
 
     input_file.seek(0)
@@ -39,6 +47,7 @@ def count_unique_sequences(input_file, match_task, indexes=None):
     num_lines = 0
     for i, line in enumerate(input_file):
         num_lines = i
+
         if indexes is not None:
             if indexes[i] is None:
                 continue
@@ -47,17 +56,21 @@ def count_unique_sequences(input_file, match_task, indexes=None):
             ret_to_write = ret[indexes[i]]
         else:
             ret_to_write = ret
+
         if type(match_task[0]) is str:
             # Align the match_task template
             generic = get_generic_sequence_by_alignment(line.strip(), match_task[0], match_task[1])
         else:
+            # Use the bases at the given positions
             generic = get_generic_sequence_by_position(line.strip(), [match_task])
         if generic is None:
             continue
+
         if generic in ret_to_write:
             ret_to_write[generic].add(i)
         else:
             ret_to_write[generic] = set([i])
+
     return ret, num_lines + 1
 
 def get_generic_sequence_by_position(sequence, match_ranges):
@@ -83,7 +96,7 @@ def get_generic_sequence_by_alignment(sequence, template, output_template):
     only the bases in positions marked with VARIABLE_REGION_TOKEN in the template.
 
     For example, if the sequence were ABCDEFGH and the template were AB**E*, the
-    returned generic sequence would be CD*F.
+    returned generic sequence would be 'CD.F'.
     '''
     aligner = Aligner(different_score=0)
     offset, score = aligner.align(sequence, template, min_overlap=len(template))
@@ -159,7 +172,9 @@ def main_count_sequences(input, output, tasks, complete_path=None):
             complete_file = open(os.path.join(complete_path, basename), 'w')
         else:
             complete_file = None
+
         write_hierarchical_unique_sequences(file, tasks, out_file, complete_file=complete_file)
+        
         if complete_file is not None:
             complete_file.close()
 
@@ -176,10 +191,7 @@ if __name__ == '__main__':
                         help='The path to an additional output directory for the complete set of unique sequences')
     args = parser.parse_args()
 
-    tasks = [(VARIABLE_REGION_TOKEN * 27 + "CCGGACGATCTGCC", VARIABLE_REGION_TOKEN * 41),
-               (-15, -6)]
-
-    main_count_sequences(args.input, args.output, tasks, complete_path=args.complete)
+    main_count_sequences(args.input, args.output, SORTING_TASKS, complete_path=args.complete)
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
