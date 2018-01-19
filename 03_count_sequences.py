@@ -4,6 +4,7 @@ import time
 import argparse
 
 GENERIC_SEQUENCE_TOKEN = '*'
+OUTPUT_DELIMITER = '\t'
 
 def count_unique_sequences(input_file, match_ranges, indexes=None):
     '''
@@ -15,6 +16,7 @@ def count_unique_sequences(input_file, match_ranges, indexes=None):
     check.
     '''
 
+    input_file.seek(0)
     ret = {}
     for i, line in enumerate(input_file):
         if indexes is not None and i not in indexes:
@@ -54,8 +56,6 @@ def write_hierarchical_unique_sequences(in_file, match_ranges, out_file, indexes
     if uniques is None:
         uniques = count_unique_sequences(in_file, [match_ranges[0]], indexes=indexes)
     for match, indexes in sorted(uniques.items(), reverse=True, key=lambda x: len(x[1])):
-        in_file.seek(0)
-
         if len(match_ranges) > 1:
             # Precompute the unique matches for the next match range to get the
             # number of unique items within this match
@@ -65,13 +65,12 @@ def write_hierarchical_unique_sequences(in_file, match_ranges, out_file, indexes
             new_uniques = None
             unique_submatches = len(indexes)
 
-        string_to_write = "\t" * indent + "{},{},{}\n".format(len(indexes), unique_submatches, match)
+        string_to_write = "\t\t" * indent + OUTPUT_DELIMITER.join([str(len(indexes)), str(unique_submatches), match]) + "\n"
 
         if complete_file is not None:
             complete_file.write(string_to_write)
-        if len(match_ranges) > 1 or complete_file is not None:
-            out_file.write(string_to_write)
         if len(match_ranges) > 1:
+            out_file.write(string_to_write)
             write_hierarchical_unique_sequences(in_file, match_ranges[1:], out_file, indexes=indexes, indent=indent + 1, complete_file=complete_file, uniques=new_uniques)
 
 if __name__ == '__main__':
