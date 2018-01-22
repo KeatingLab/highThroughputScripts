@@ -240,6 +240,16 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, st
                             **kwargs)
         for result in pool.imap(processor, izip(records, records), chunksize=1000):
             original_input, ref_index, dna_sequence, aa_sequence, quality, error_key = result
+            if stats:
+                forward, reverse = original_input
+                update_quality_stats(STAT_FORWARD_KEY, forward)
+                update_quality_stats(STAT_REVERSE_KEY, reverse)
+                if quality is not None:
+                    update_quality_stats(STAT_TOTAL_KEY, quality)
+
+                    delta = math.fabs(len(references[ref_index]) - len(dna_sequence))
+                    sc.apply_counter(STAT_CUTOFFS, lambda c: delta <= c, STAT_LENGTH_DIFF_KEY)
+
             if ref_index == -1:
                 if error_key is not None:
                     sc.counter(1, STAT_DELETIONS_KEY, error_key)
@@ -248,16 +258,6 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, st
             dna_files[ref_index].write(dna_sequence + "\n")
             aa_files[ref_index].write(aa_sequence + "\n")
             qual_files[ref_index].write(",".join([str(q) for q in quality]) + "\n")
-
-            if stats:
-                forward, reverse = original_input
-                update_quality_stats(STAT_FORWARD_KEY, forward)
-                update_quality_stats(STAT_REVERSE_KEY, reverse)
-                update_quality_stats(STAT_TOTAL_KEY, quality)
-
-                delta = math.fabs(len(references[ref_index]) - len(dna_sequence))
-                sc.apply_counter(STAT_CUTOFFS, lambda c: delta <= c, STAT_LENGTH_DIFF_KEY)
-
 
     for file in dna_files + aa_files + qual_files:
         file.close()
