@@ -35,6 +35,11 @@ STAT_REVERSE_KEY = "reverse"
 STAT_TOTAL_KEY = "total"
 STAT_LENGTH_DIFF_KEY = "length_deltas"
 
+STAT_DELETIONS_KEY = "deletions"
+STAT_BAD_FORWARD_KEY = "bad forward read"
+STAT_BAD_REVERSE_KEY = "bad reverse read"
+STAT_EXCESS_LENGTH_KEY = "excessive length delta"
+
 STAT_CUTOFFS = [0, 1, 2, 3, 5, 10, 20]
 STAT_QUALITY_BINS = xrange(0, 40, 5)
 
@@ -65,7 +70,7 @@ REFERENCE_SCORING_RANGES = None
 List of expression strings which will be evaluated and written out to the
 params.txt file.
 '''
-PARAMETER_LIST = ["args.input", "args.output", "args.threshold", "args.misreads", "args.max_delta", "args.processes", "args.stats", "REFERENCE_SEQUENCES", "OUTPUT_RANGES", "REFERENCE_SCORING_RANGES", "STAT_CUTOFFS", "STAT_QUALITY_BINS"]
+PARAMETER_LIST = ["args.input", "args.output", "args.threshold", "args.misreads", "threshold_reverse", "misreads_reverse", "args.max_delta", "args.processes", "args.stats", "REFERENCE_SEQUENCES", "OUTPUT_RANGES", "REFERENCE_SCORING_RANGES", "STAT_CUTOFFS", "STAT_QUALITY_BINS"]
 
 def combine_records(forward_record, reverse_record, reference_sequences, min_overlap=-1, max_overlap=-1, max_length_delta=1e30, reference_scoring_ranges=None):
     '''
@@ -113,6 +118,7 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
     # Discard the read if total length is too different from reference length
     if max_length_delta <= len(reference):
         if math.fabs(aligner.length(*alignment_set) - len(reference)) > max_length_delta:
+            sc.counter(1, STAT_DELETIONS_KEY, STAT_EXCESS_LENGTH_KEY)
             return -1, None, None
 
     # Combine the reads to produce the overall sequence.
@@ -142,7 +148,7 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
 
     return reference_index, combined_sequence, combined_quality
 
-def combine_records_processor(references, (forward, reverse), threshold=0, misreads=0, output_ranges=None, **kwargs):
+def combine_records_processor(references, (forward, reverse), threshold=0, misreads=0, threshold_reverse=0, misreads_reverse=0, output_ranges=None, **kwargs):
     '''
     Performs initial quality check and passes through to the main combine_records
     function. Returns (input, reference, dna_sequence, aa_sequence, quality), where reference
@@ -154,11 +160,14 @@ def combine_records_processor(references, (forward, reverse), threshold=0, misre
     should be output. (Note: it should match the reading frame of the coding
     sequence to ensure correct translation.)
     '''
-    if not is_quality_read(forward, threshold=threshold, allowable_misreads=misreads) or not is_quality_read(reverse, threshold=threshold, allowable_misreads=misreads):
-        return (forward, reverse), -1, None, None, None
+    if not is_quality_read(forward, threshold=threshold, allowable_misreads=misreads):
+        return (forward, reverse), -1, None, None, None, STAT_BAD_FORWARD_KEY
+    if not is_quality_read(reverse, threshold=threshold_reverse, allowable_misreads=misreads_reverse):
+        return (forward, reverse), -1, None, None, None, STAT_BAD_REVERSE_KEY
+
     reference, dna_sequence, quality = combine_records(forward, reverse, references, **kwargs)
     if reference == -1 or len(dna_sequence) == 0:
-        return (forward, reverse), -1, None, None, None
+        return (forward, reverse), -1, None, None, None, STAT_EXCESS_LENGTH_KEY
 
     if output_ranges is not None:
         start, end = output_ranges[reference]
@@ -166,7 +175,7 @@ def combine_records_processor(references, (forward, reverse), threshold=0, misre
         quality = quality[start:end]
 
     aa_sequence = str(Seq.Seq(dna_sequence).translate())
-    return (forward, reverse), reference, dna_sequence, aa_sequence, quality
+    return (forward, reverse), reference, dna_sequence, aa_sequence, quality, None
 
 ### Helper functions
 
@@ -192,16 +201,14 @@ def update_quality_stats(parent_key, record):
 
 ### Main function
 
-def write_combined_records(input_path, references, out_dir, num_processes=15, threshold=0, misreads=0, stats=False, output_ranges=None, min_overlap=10, max_overlap=30, max_length_delta=1e30, reference_scoring_ranges=None):
+def write_combined_records(input_path, references, out_dir, num_processes=15, stats=False, **kwargs):
     '''
     Combines the records at input_path by aligning them to the given reference sequences,
     and saves them to the appropriate locations within out_dir. The combined DNA
     sequences are written to out_dir/dnaframe, the amino acid sequences are
     written to out_dir/seqframe, and the qualities are written to qualframe (as CSV).
 
-    min_overlap and max_overlap specify conditions for the overlap between the
-    forward and reverse reads. max_length_delta is the maximum absolute difference
-    between the reference and the reads aligned to the reference.
+    The keyword arguments in **kwargs will be passed into the combine_records function.
 
     '''
     basename = os.path.basename(input_path)
@@ -230,16 +237,12 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, th
         pool = multiprocessing.Pool(processes=num_processes)
         processor = partial(combine_records_processor,
                             references,
-                            threshold=threshold,
-                            misreads=misreads,
-                            output_ranges=output_ranges,
-                            min_overlap=min_overlap,
-                            max_overlap=max_overlap,
-                            max_length_delta=max_length_delta,
-                            reference_scoring_ranges=reference_scoring_ranges)
+                            **kwargs)
         for result in pool.imap(processor, izip(records, records), chunksize=1000):
-            original_input, ref_index, dna_sequence, aa_sequence, quality = result
+            original_input, ref_index, dna_sequence, aa_sequence, quality, error_key = result
             if ref_index == -1:
+                if error_key is not None:
+                    sc.counter(1, STAT_DELETIONS_KEY, error_key)
                 continue
 
             dna_files[ref_index].write(dna_sequence + "\n")
@@ -272,6 +275,10 @@ if __name__ == '__main__':
                         help='The quality score below which reads should not be used (default 0)')
     parser.add_argument('-m', '--misreads', type=int, default=0,
                         help='The number of allowable reads below the threshold score before the read is discarded')
+    parser.add_argument('-tr', '--threshold-reverse', dest='threshold_reverse', type=int, default=-1,
+                        help='The quality score below which reverse reads should not be used (default same as --threshold)')
+    parser.add_argument('-mr', '--misreads-reverse', dest='misreads_reverse', type=int, default=-1,
+                        help='The number of allowable reads below the threshold score before the reverse read is discarded (default same as --misreads)')
     parser.add_argument('-d', '--max-delta', dest='max_delta', type=int, default=1e30,
                         help='The maximum difference in length between the reference and the combined DNA alignment (default none)')
     parser.add_argument('-p', '--processes', type=int, default=15,
@@ -281,12 +288,16 @@ if __name__ == '__main__':
     parser.set_defaults(stats=False)
     args = parser.parse_args()
 
+    threshold_reverse = args.threshold_reverse if args.threshold_reverse != -1 else args.threshold
+    misreads_reverse = args.misreads_reverse if args.misreads_reverse != -1 else args.misreads
     write_combined_records(args.input,
                            REFERENCE_SEQUENCES,
                            args.output,
                            num_processes=args.processes,
                            threshold=args.threshold,
                            misreads=args.misreads,
+                           threshold_reverse=threshold_reverse,
+                           misreads_reverse=misreads_reverse,
                            stats=args.stats,
                            output_ranges=OUTPUT_RANGES,
                            max_length_delta=args.max_delta,
