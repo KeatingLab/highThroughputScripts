@@ -192,6 +192,15 @@ def reset():
     '''
     StatCollector().statistics = {}
 
+def write_input_parameters(params, out_path):
+    '''
+    Convenience function that writes out the given dictionary of input parameter
+    names to parameter values to the given file path.
+    '''
+    with open(out_path, 'w') as file:
+        for name, value in params:
+            file.write("{} = {}\n".format(name, value))
+
 if __name__ == '__main__':
     for i in xrange(10):
         counter(1, "test-1")

@@ -61,6 +61,12 @@ This is useful if leading or trailing regions are known to be varied.
 '''
 REFERENCE_SCORING_RANGES = None
 
+'''
+List of expression strings which will be evaluated and written out to the
+params.txt file.
+'''
+PARAMETER_LIST = ["args.input", "args.output", "args.threshold", "args.misreads", "args.max_delta", "args.processes", "args.stats", "REFERENCE_SEQUENCES", "OUTPUT_RANGES", "REFERENCE_SCORING_RANGES", "STAT_CUTOFFS", "STAT_QUALITY_BINS"]
+
 def combine_records(forward_record, reverse_record, reference_sequences, min_overlap=-1, max_overlap=-1, max_length_delta=1e30, reference_scoring_ranges=None):
     '''
     Computes the alignments of both forward and reverse reads to the reference
@@ -288,5 +294,7 @@ if __name__ == '__main__':
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
-    #offset, score = aligner.align(seq2, seq1, unidirectional=True)
-    #print('\n'.join(aligner.format(seq2, seq1, offset)))
+
+    # Write out the input parameters to file
+    params_path = os.path.join(args.output, "params.txt")
+    sc.write_input_parameters([(name, eval(name)) for name in PARAMETER_LIST], params_path)

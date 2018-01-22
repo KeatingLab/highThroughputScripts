@@ -28,6 +28,12 @@ output template were A*****, the returned generic sequence would be '.BCDEF'.
 SORTING_TASKS = [(VARIABLE_REGION_TOKEN * 27 + "CCGGACGATCTGCC", VARIABLE_REGION_TOKEN * 41),
                  (-15, -6)]
 
+'''
+List of expression strings which will be evaluated and written out to the
+params.txt file.
+'''
+PARAMETER_LIST = ["args.input", "args.output", "args.complete", "SORTING_TASKS", "DISCARD_THRESHOLD"]
+
 def count_unique_sequences(input_file, match_task, indexes=None):
     '''
     If indexes is None, returns two items. First, a dictionary where each key
@@ -195,3 +201,7 @@ if __name__ == '__main__':
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
+
+    # Write out the input parameters to file
+    params_path = os.path.join(args.output, "params.txt")
+    sc.write_input_parameters([(name, eval(name)) for name in PARAMETER_LIST], params_path)

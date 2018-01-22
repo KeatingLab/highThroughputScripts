@@ -13,6 +13,7 @@ from functools import partial
 import time
 from cStringIO import StringIO
 import argparse
+import stat_collector as sc
 
 # The possible index codes, found from the reverse complement of the first six bases
 # of the reverse read.
@@ -34,6 +35,11 @@ BARCODE_FILE_PREFIX = "barcode_"
 # The maximum number of processes to use (for the multithread version only).
 NUM_PROCESSES = 15
 
+'''
+List of expression strings which will be evaluated and written out to the
+params.txt file.
+'''
+PARAMETER_LIST = ["args.forward", "args.reverse", "args.out", "args.mode", "args.numlines", "index_codes", "barcodes", "BARCODE_FILE_PREFIX"]
 
 ### Single thread implementation
 
@@ -344,3 +350,7 @@ if __name__ == '__main__':
         print("Unidentified mode: expected 'single' or 'multi'")
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
+
+    # Write out the input parameters to file
+    params_path = os.path.join(args.out, "params.txt")
+    sc.write_input_parameters([(name, eval(name)) for name in PARAMETER_LIST], params_path)
