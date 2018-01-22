@@ -36,7 +36,14 @@ def combine_quality_stats(input_dir, marker, out_dir):
 
 
 def write_quality_information(quality_dict, file, prefix=[]):
-    for key in sorted(quality_dict.keys(), key=lambda x: int(x)):
+    # Check if keys are integers
+    integers = True
+    try:
+        for x in quality_dict.keys():
+            _ = int(x)
+    except:
+        integers = False
+    for key in sorted(quality_dict.keys(), key=lambda x: int(x) if integers else x):
         if type(quality_dict[key]) == dict:
             write_quality_information(quality_dict[key], file, prefix + [key])
         else:
