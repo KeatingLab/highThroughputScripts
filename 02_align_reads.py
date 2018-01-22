@@ -298,6 +298,8 @@ if __name__ == '__main__':
                            misreads=args.misreads,
                            threshold_reverse=threshold_reverse,
                            misreads_reverse=misreads_reverse,
+                           min_overlap=10,
+                           max_overlap=30,
                            stats=args.stats,
                            output_ranges=OUTPUT_RANGES,
                            max_length_delta=args.max_delta,
