@@ -1,8 +1,5 @@
 '''
-This script simply concatenates the results of the statistics written by 02_align_reads.py.
-Each file is in CSV format - see 02_align_reads.py for how the file is structured.
-Note that this file will concatenate any set of distributions in CSV format, not just those
-for 02_align_reads.py.
+Concatenates CSV files such as those created by the stat_collector script.
 '''
 
 import os
@@ -12,9 +9,11 @@ SEPARATOR = '\t'
 
 def combine_quality_stats(input_dir, marker, out_dir):
     quality_information = {}
+    file_count = 0
     for path in os.listdir(input_dir):
         if path[0] == '.': continue
-        if marker not in path: continue
+        if len(marker) > 0 and marker not in path: continue
+        file_count += 1
         with open(os.path.join(input_dir, path), 'r') as file:
             for line in file:
                 comps = line.strip().split(',')
@@ -33,6 +32,7 @@ def combine_quality_stats(input_dir, marker, out_dir):
 
     with open(os.path.join(out_dir, "stats_" + marker + ".txt"), 'w') as file:
         write_quality_information(quality_information, file)
+    print("Concatenated {} files with marker '{}'.".format(file_count, marker))
 
 
 def write_quality_information(quality_dict, file, prefix=[]):
@@ -43,14 +43,14 @@ def write_quality_information(quality_dict, file, prefix=[]):
             file.write(SEPARATOR.join(prefix + [key, str(quality_dict[key])]) + '\n')
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Concatenates the statistics written by the alignment script into single files based on their suffixes (e.g. forward, reverse, total).')
+    parser = argparse.ArgumentParser(description="Concatenates statistics written by the stat_collector module into single files. Can either concatenate the entire input directory, or split by markers in the input file names (e.g. 'forward', 'reverse', etc.).")
     parser.add_argument('input', metavar='I', type=str,
                         help='The path to the statistics directory')
     parser.add_argument('output', metavar='O', type=str,
                         help='The path to the output directory')
+    parser.add_argument('markers', metavar='M', type=str, nargs='*', default=[""],
+                        help='The markers for each type of statistic to use (if nothing is passed, concatenates all contents of the input directory)')
     args = parser.parse_args()
 
-    markers = ['forward', 'reverse', 'total', 'length_deltas']
-    for marker in markers:
-        print("Concatenating {} files...".format(marker))
+    for marker in args.markers:
         combine_quality_stats(args.input, marker, args.output)

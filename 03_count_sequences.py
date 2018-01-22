@@ -5,7 +5,7 @@ import argparse
 from aligner import *
 
 OUTPUT_DELIMITER = '\t'
-STAT_SCORES = "discard_count"
+STAT_SCORES = "scores"
 
 '''
 If the score of the alignment is less than the length of the template minus
@@ -174,7 +174,7 @@ def main_count_sequences(input, output, tasks, complete_path=None):
             complete_file = None
 
         write_hierarchical_unique_sequences(file, tasks, out_file, complete_file=complete_file)
-        
+
         if complete_file is not None:
             complete_file.close()
 
