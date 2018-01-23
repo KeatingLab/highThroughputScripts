@@ -82,17 +82,32 @@ class StatCollector(object):
             current_item = current_item[key]
         current_item[path[-1]] = item
 
+    def create_or_set(self, item_function, *path):
+        '''
+        Creates the given key path if necessary. Calls item_function with the old
+        value at the key path (or None if it did not exist), and puts the return
+        value at the key path.
+        '''
+        assert len(path) > 0, "Cannot set a value at root key path"
+
+        current_item = self.statistics
+        for key in path[:-1]:
+            assert type(current_item) is dict, "The key path leads to a premature non-dictionary type: {}".format("->".join(path))
+            if key not in current_item:
+                current_item[key] = {}
+            current_item = current_item[key]
+        if path[-1] in current_item:
+            current_item[path[-1]] = item_function(current_item[path[-1]])
+        else:
+            current_item[path[-1]] = item_function(None)
+
 
 def counter(amount, *path):
     '''
     Increments the statistic at the given key path by amount.
     '''
     collector = StatCollector()
-    old_value = collector.get(*path)
-    if old_value is None:
-        collector.create(int(amount), *path)
-    else:
-        collector.set(old_value + int(amount), *path)
+    collector.create_or_set(lambda old: (old if old is not None else 0) + int(amount), *path)
 
 def apply_counter(child_keys, amount_function, *path):
     '''
@@ -101,14 +116,12 @@ def apply_counter(child_keys, amount_function, *path):
     terminating key as argument, and return an integer.
     '''
     collector = StatCollector()
-    parent = collector.get(*path)
-
     for key in child_keys:
         counter(amount_function(key), *(list(path) + [key]))
 
 def _permute_apply_counter(child_key_lists, amount_function, path, prefix=[]):
     if len(child_key_lists) == 1:
-        apply_counter(list(map(lambda x: tuple(prefix + [x]), child_key_lists[0])), amount_function, path)
+        apply_counter([tuple(prefix + [x]) for x in child_key_lists[0]], amount_function, path)
     elif len(child_key_lists) > 1:
         for key in child_key_lists[0]:
             _permute_apply_counter(child_key_lists[1:], amount_function, path, prefix + [key])
@@ -128,11 +141,8 @@ def unique_counter(item, *path):
     seen before by that key path.
     '''
     collector = StatCollector()
-    old_value = collector.get(*path)
-    if old_value is None:
-        collector.create(set([item]), *path)
-    else:
-        collector.set(old_value | set([item]), *path)
+    new_set = set([item])
+    collector.create_or_set(lambda old: (old | new_set) if old is not None else new_set, *path)
 
 def fraction(amount, total_amount, *path):
     '''
