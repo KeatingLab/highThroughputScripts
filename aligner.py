@@ -28,16 +28,22 @@ class Aligner(object):
                 ret[i] = True
         return ret
 
-    def score(self, sequence_1, sequence_2, offset, scoring_maps=None):
+    def score(self, sequence_1, sequence_2, offset, scoring_maps=None, current_max=None):
         '''
         Scores the alignment where sequence_2 is shifted by offset to the right
-        of the start of sequence_1.
+        of the start of sequence_1. If current_max is not None, the alignment
+        score calculation may be stopped early if it is known to be less than
+        current_max.
         '''
         total = 0
         num_mutations = 0
         if offset < 0:
             total += -offset * self.gap_score
         for i, base_1 in enumerate(sequence_1):
+            if current_max is not None:
+                if current_max - total > self.identical_score * min(len(sequence_1) - i, len(sequence_2) - i + offset):
+                    return NO_SCORE
+
             if scoring_maps is not None and ((scoring_maps[0] is not None and not scoring_maps[0][i]) or (scoring_maps[1] is not None and not scoring_maps[1][i - offset])):
                 total += self.gap_score
             elif i - offset < 0 or i - offset >= len(sequence_2):
@@ -53,6 +59,7 @@ class Aligner(object):
                     num_mutations += 1
                 else:
                     return NO_SCORE
+
         if len(sequence_1) - offset < len(sequence_2):  # Still bases left in sequence_2
             total += (len(sequence_1) - offset) * self.gap_score
         return total
@@ -184,7 +191,7 @@ class Aligner(object):
             overlap = self.overlap(sequence_1, sequence_2, offset)
             if (min_overlap >= 0 and overlap < min_overlap) or (max_overlap >= 0 and overlap > max_overlap):
                 continue
-            score = self.score(sequence_1, sequence_2, offset, scoring_maps=scoring_maps)
+            score = self.score(sequence_1, sequence_2, offset, scoring_maps=scoring_maps, current_max=best_score)
             if score != NO_SCORE and score > best_score:
                 best_score = score
                 best_offset = offset

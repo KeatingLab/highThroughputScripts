@@ -7,8 +7,7 @@ DNA sequence, protein sequence, and set of quality scores.
 from Bio import SeqIO,Seq
 import multiprocessing
 import sys, os
-import itertools
-from itertools import izip, imap
+from itertools import izip
 import math
 from functools import partial
 import time
@@ -149,7 +148,7 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
 
     return reference_index, combined_sequence, combined_quality
 
-def combine_records_processor(references, record_list, threshold=0, misreads=0, threshold_reverse=0, misreads_reverse=0, output_ranges=None, **kwargs):
+def combine_records_processor(references, (forward, reverse), threshold=0, misreads=0, threshold_reverse=0, misreads_reverse=0, output_ranges=None, **kwargs):
     '''
     Performs initial quality check and passes through to the main combine_records
     function. Returns (input, reference, dna_sequence, aa_sequence, quality), where reference
@@ -161,28 +160,22 @@ def combine_records_processor(references, record_list, threshold=0, misreads=0, 
     should be output. (Note: it should match the reading frame of the coding
     sequence to ensure correct translation.)
     '''
-    ret = []
-    for forward, reverse in record_list:
-        if not is_quality_read(forward, threshold=threshold, allowable_misreads=misreads):
-            ret.append(((forward, reverse), -1, None, None, None, STAT_BAD_FORWARD_KEY))
-            continue
-        if not is_quality_read(reverse, threshold=threshold_reverse, allowable_misreads=misreads_reverse):
-            ret.append(((forward, reverse), -1, None, None, None, STAT_BAD_REVERSE_KEY))
-            continue
+    if not is_quality_read(forward, threshold=threshold, allowable_misreads=misreads):
+        return (forward, reverse), -1, None, None, None, STAT_BAD_FORWARD_KEY
+    if not is_quality_read(reverse, threshold=threshold_reverse, allowable_misreads=misreads_reverse):
+        return (forward, reverse), -1, None, None, None, STAT_BAD_REVERSE_KEY
 
-        reference, dna_sequence, quality = combine_records(forward, reverse, references, **kwargs)
-        if reference == -1 or len(dna_sequence) == 0:
-            ret.append(((forward, reverse), -1, None, None, None, STAT_EXCESS_LENGTH_KEY))
-            continue
+    reference, dna_sequence, quality = combine_records(forward, reverse, references, **kwargs)
+    if reference == -1 or len(dna_sequence) == 0:
+        return (forward, reverse), -1, None, None, None, STAT_EXCESS_LENGTH_KEY
 
-        if output_ranges is not None:
-            start, end = output_ranges[reference]
-            dna_sequence = dna_sequence[start:end]
-            quality = quality[start:end]
+    if output_ranges is not None:
+        start, end = output_ranges[reference]
+        dna_sequence = dna_sequence[start:end]
+        quality = quality[start:end]
 
-        aa_sequence = str(Seq.Seq(dna_sequence).translate())
-        ret.append(((forward, reverse), reference, dna_sequence, aa_sequence, quality, None))
-    return ret
+    aa_sequence = str(Seq.Seq(dna_sequence).translate())
+    return (forward, reverse), reference, dna_sequence, aa_sequence, quality, None
 
 ### Helper functions
 
@@ -205,18 +198,6 @@ def update_quality_stats(parent_key, record):
     # Increment every (q, c) statistic for which the minimum quality
     # when the c worst bases are discarded is at least q.
     sc.permute_apply_counter([STAT_QUALITY_BINS, STAT_CUTOFFS], lambda x: 1 if sorted_qualities[x[1]] >= x[0] else 0, parent_key)
-
-def chunk(n, iterable):
-    it = iter(iterable)
-    while True:
-        ret = []
-        try:
-            while len(ret) < n:
-                ret.append(next(it))
-            yield ret
-        except StopIteration:
-            yield ret
-            return
 
 ### Main function
 
@@ -258,29 +239,29 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, st
                             references,
                             **kwargs)
         i = 0
-        for result in pool.imap(processor, chunk(100, izip(records, records)), chunksize=1000):
-            for original_input, ref_index, dna_sequence, aa_sequence, quality, error_key in result:
-                if i % 1000 == 0:
-                    print("Finished {} sequences".format(i))
-                i += 1
-                if stats:
-                    forward, reverse = original_input
-                    update_quality_stats(STAT_FORWARD_KEY, forward)
-                    update_quality_stats(STAT_REVERSE_KEY, reverse)
-                    if quality is not None:
-                        update_quality_stats(STAT_TOTAL_KEY, quality)
+        for result in pool.imap(processor, izip(records, records), chunksize=1000):
+            if i % 1000 == 0:
+                print("Finished {} sequences".format(i))
+            i += 1
+            original_input, ref_index, dna_sequence, aa_sequence, quality, error_key = result
+            if stats:
+                forward, reverse = original_input
+                update_quality_stats(STAT_FORWARD_KEY, forward)
+                update_quality_stats(STAT_REVERSE_KEY, reverse)
+                if quality is not None:
+                    update_quality_stats(STAT_TOTAL_KEY, quality)
 
-                        delta = math.fabs(len(references[ref_index]) - len(dna_sequence))
-                        sc.apply_counter(STAT_CUTOFFS, lambda c: delta <= c, STAT_LENGTH_DIFF_KEY)
+                    delta = math.fabs(len(references[ref_index]) - len(dna_sequence))
+                    sc.apply_counter(STAT_CUTOFFS, lambda c: delta <= c, STAT_LENGTH_DIFF_KEY)
 
-                if ref_index == -1:
-                    if error_key is not None:
-                        sc.counter(1, STAT_DELETIONS_KEY, error_key)
-                    continue
+            if ref_index == -1:
+                if error_key is not None:
+                    sc.counter(1, STAT_DELETIONS_KEY, error_key)
+                continue
 
-                dna_files[ref_index].write(dna_sequence + "\n")
-                aa_files[ref_index].write(aa_sequence + "\n")
-                qual_files[ref_index].write(",".join([str(q) for q in quality]) + "\n")
+            dna_files[ref_index].write(dna_sequence + "\n")
+            aa_files[ref_index].write(aa_sequence + "\n")
+            qual_files[ref_index].write(",".join([str(q) for q in quality]) + "\n")
 
     for file in dna_files + aa_files + qual_files:
         file.close()
