@@ -3,6 +3,8 @@ Contains the Aligner class, which performs general alignment tasks such as
 pairwise alignment, scoring, formatting, and iterating.
 '''
 
+import numpy as np
+
 GENERIC_SEQUENCE_TOKEN = '.'
 VARIABLE_REGION_TOKEN = '*'
 NON_SCORED_TOKENS = set([GENERIC_SEQUENCE_TOKEN, VARIABLE_REGION_TOKEN])
@@ -35,34 +37,25 @@ class Aligner(object):
         score calculation may be stopped early if it is known to be less than
         current_max.
         '''
-        total = 0
-        num_mutations = 0
-        if offset < 0:
-            total += -offset * self.gap_score
-        for i, base_1 in enumerate(sequence_1):
-            if current_max is not None:
-                if current_max - total > self.identical_score * min(len(sequence_1) - i, len(sequence_2) - i + offset):
-                    return NO_SCORE
 
-            if scoring_maps is not None and ((scoring_maps[0] is not None and not scoring_maps[0][i]) or (scoring_maps[1] is not None and not scoring_maps[1][i - offset])):
-                total += self.gap_score
-            elif i - offset < 0 or i - offset >= len(sequence_2):
-                total += self.gap_score
-            else:
-                base_2 = sequence_2[i - offset]
-                if base_1 == base_2:
-                    total += self.identical_score
-                elif base_1 in NON_SCORED_TOKENS or base_2 in NON_SCORED_TOKENS:
-                    pass
-                elif self.mutation_threshold < 0 or num_mutations < self.mutation_threshold:
-                    total += self.different_score
-                    num_mutations += 1
-                else:
-                    return NO_SCORE
+        overlap_start, overlap_end = self.overlap_region(sequence_1, sequence_2, offset)
+        if scoring_maps is not None:
+            joined_1 = ''.join(sequence_1[i] for i in xrange(overlap_start, overlap_end) if (scoring_maps[0] is None or scoring_maps[0][i]) and (scoring_maps[1] is None or scoring_maps[1][i + offset]))
+            joined_2 = ''.join(sequence_2[i - offset] for i in xrange(overlap_start, overlap_end) if (scoring_maps[0] is None or scoring_maps[0][i]) and (scoring_maps[1] is None or scoring_maps[1][i + offset]))
+        else:
+            joined_1 = sequence_1[overlap_start:overlap_end]
+            joined_2 = sequence_2[overlap_start - offset:overlap_end - offset]
 
-        if len(sequence_1) - offset < len(sequence_2):  # Still bases left in sequence_2
-            total += (len(sequence_1) - offset) * self.gap_score
-        return total
+        arr_1 = np.frombuffer(joined_1, dtype=np.byte)
+        arr_2 = np.frombuffer(joined_2, dtype=np.byte)
+
+        num_identical = (arr_1 == arr_2).sum()
+        num_different = len(joined_1) - num_identical
+        if self.mutation_threshold >= 0 and num_different > self.mutation_threshold:
+            return NO_SCORE
+        num_gaps = max(len(sequence_1), len(sequence_2) + offset) - len(joined_1)
+
+        return num_identical * self.identical_score + num_different * self.different_score + num_gaps * self.gap_score
 
     def overlap(self, sequence_1, sequence_2, offset):
         '''
@@ -78,6 +71,22 @@ class Aligner(object):
         else:
             # sequence_2 is contained within sequence_1
             return len(sequence_2)
+
+    def overlap_region(self, sequence_1, sequence_2, offset):
+        '''
+        Computes the range of bases that overlap between the two sequences when
+        sequence_2 is shifted by offset to the right of the start of sequence_1.
+        The range is given in terms of sequence_1.
+        '''
+        if offset < 0:
+            # sequence_2 is hanging off the 5' end of sequence_1
+            return (0, min(len(sequence_1), len(sequence_2) + offset))
+        elif offset + len(sequence_2) >= len(sequence_1):
+            # sequence_2 is hanging off the 3' end of sequence_1
+            return (offset, len(sequence_1))
+        else:
+            # sequence_2 is contained within sequence_1
+            return (offset, len(sequence_2) + offset)
 
     def format(self, sequence_1, sequence_2, offset):
         '''

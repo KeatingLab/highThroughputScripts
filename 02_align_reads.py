@@ -7,7 +7,7 @@ DNA sequence, protein sequence, and set of quality scores.
 from Bio import SeqIO,Seq
 import multiprocessing
 import sys, os
-from itertools import izip
+from itertools import izip, imap
 import math
 from functools import partial
 import time
@@ -294,6 +294,7 @@ if __name__ == '__main__':
 
     threshold_reverse = args.threshold_reverse if args.threshold_reverse != -1 else args.threshold
     misreads_reverse = args.misreads_reverse if args.misreads_reverse != -1 else args.misreads
+
     write_combined_records(args.input,
                            REFERENCE_SEQUENCES,
                            args.output,
