@@ -7,6 +7,8 @@ sequences by a similarity cutoff.
 
 import sys
 from aligner import Aligner
+import multiprocessing
+from functools import partial
 
 INDENT_CHARACTER = '\t'
 DELIMITER_CHARACTER = '\t'
@@ -78,6 +80,13 @@ def set_at_key_path(dictionary, key_path, value):
         current = current[key]
     current[key_path[-1]] = value
 
+def cluster_sequences_processor(merge_function, seq, (index, other_seq)):
+    '''
+    Convenience function for multiprocessing that calls the merge_function and
+    returns part of the input.
+    '''
+    return index, merge_function(seq, other_seq)
+
 def cluster_sequences(all_sequences, merge_function):
     '''
     Returns an iterator that, for each pair of candidate sequences, calls the
@@ -90,6 +99,7 @@ def cluster_sequences(all_sequences, merge_function):
     merged result and yielded.
     '''
     visited_indexes = set()
+    pool = multiprocessing.Pool(processes=10)
     for i in xrange(len(all_sequences)):
         if i in visited_indexes:
             continue
@@ -98,15 +108,14 @@ def cluster_sequences(all_sequences, merge_function):
         merged_seq = seq
         visited_indexes.add(i)
 
-        for j in xrange(i + 1, len((all_sequences))):
-            if j in visited_indexes:
-                continue
-            other_seq = all_sequences[j]
-            other_root = other_seq.keys()[0]
-            result = merge_function(merged_seq, other_seq)
-            if result is not None:
-                merged_seq = result
-                visited_indexes.add(j)
+        processor = partial(cluster_sequences_processor, merge_function, seq)
+        indexes = ((j, all_sequences[j]) for j in xrange(i + 1, len((all_sequences))) if j not in visited_indexes)
+        for index, result in pool.imap(processor, indexes, chunksize=1000):
+            if result:
+                other_seq = all_sequences[index]
+                other_root = other_seq.keys()[0]
+                merged_seq[root] = merge_sequence_dicts(merged_seq[root], other_seq[other_root])
+                visited_indexes.add(index)
         yield merged_seq
         print("After {}, visited {} sequences".format(i, len(visited_indexes)))
         if len(visited_indexes) == len(all_sequences):
@@ -148,14 +157,12 @@ def merge_sequence_dicts(source, new):
 
 def compare_sequence_dictionaries(source, new):
     '''
-    Returns a merged dictionary if the two sequence dictionaries should be merged.
+    Returns True if the two sequence dictionaries should be merged.
     '''
     aligner = Aligner(different_score=0)
     source_key = source.keys()[0]
     new_key = new.keys()[0]
-    if aligner.score(source_key, new_key, 0) >= len(source_key) - ALLOWED_SEQUENCE_MUTATIONS:
-        return {source_key: merge_sequence_dicts(source[source_key], new[new_key])}
-    return None
+    return aligner.score(source_key, new_key, 0) >= len(source_key) - ALLOWED_SEQUENCE_MUTATIONS
 
 if __name__ == '__main__':
     input_path = sys.argv[1]
