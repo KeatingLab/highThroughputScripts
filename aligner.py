@@ -39,6 +39,7 @@ class Aligner(object):
         '''
 
         overlap_start, overlap_end = self.overlap_region(sequence_1, sequence_2, offset)
+        overlap_length = overlap_end - overlap_start
         if scoring_maps is not None:
             joined_1 = ""
             joined_2 = ""
@@ -51,15 +52,15 @@ class Aligner(object):
         else:
             count = overlap_start - overlap_end
             arr_1 = np.frombuffer(sequence_1, dtype=np.byte, count=count, offset=overlap_start)
-            arr_2 = np.frombuffer(joined_2, dtype=np.byte, count=count, offset=overlap_start - offset)
+            arr_2 = np.frombuffer(sequence_2, dtype=np.byte, count=count, offset=overlap_start - offset)
 
         # A NumPy trick that allows us to perform the scoring without iterating
         # over the sequences.
         num_identical = (arr_1 == arr_2).sum()
-        num_different = len(joined_1) - num_identical
+        num_different = overlap_length - num_identical
         if self.mutation_threshold >= 0 and num_different > self.mutation_threshold:
             return NO_SCORE
-        num_gaps = max(len(sequence_1), len(sequence_2) + offset) - len(joined_1)
+        num_gaps = max(len(sequence_1), len(sequence_2) + offset) - overlap_length
 
         return num_identical * self.identical_score + num_different * self.different_score + num_gaps * self.gap_score
 
