@@ -287,7 +287,7 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
             merged_seq = seq
             processor = partial(cluster_sequences_processor, task, seq)
             indexes = ((j, all_sequences[j]) for j in xrange(i + 1, len((all_sequences))) if j not in visited_indexes)
-            for index, result in map(processor, indexes):#pool.imap(processor, indexes, chunksize=1000):
+            for index, result in pool.imap(processor, indexes, chunksize=1000):
                 if result:
                     other_seq = all_sequences[index]
                     other_root = get_root_item(other_seq)[0]
