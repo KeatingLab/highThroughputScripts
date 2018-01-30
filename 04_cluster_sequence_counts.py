@@ -11,10 +11,13 @@ import argparse
 from aligner import Aligner
 import multiprocessing
 from functools import partial
+import itertools
+import stat_collector as sc
 
 INDENT_CHARACTER = '\t'
 DELIMITER_CHARACTER = '\t'
 INDEX_HELPER_KEY = "__index__"
+EXCLUDED_BASE = '*'
 
 TASK_CLUSTER = "cluster"
 TASK_SWITCH = "switch"
@@ -248,6 +251,27 @@ def compare_sequence_dictionaries(source, new, task):
         max_score = sum(score_map)
     return aligner.score(source_key, new_key, 0, scoring_maps=scoring_maps) >= max_score - allowed_mutations
 
+def sequence_hash_excluding_bases(sequence, scoring_map, num_exclude):
+    '''
+    Yields tuples where the first item indicates which base(s) were excluded, and
+    the second item is a sequence hash with those bases replaced with EXCLUDED_BASE.
+    '''
+    if scoring_map is not None:
+        trimmed_sequence = [c for i, c in enumerate(sequence) if len(scoring_map) > i and scoring_map[i]]
+    else:
+        trimmed_sequence = list(sequence)
+    if num_exclude == 0:
+        yield "none", ''.join(trimmed_sequence)
+        return
+    for combo in itertools.combinations(xrange(len(trimmed_sequence)), num_exclude):
+        old_values = []
+        for exclusion in combo:
+            old_values.append(trimmed_sequence[exclusion])
+            trimmed_sequence[exclusion] = EXCLUDED_BASE
+        yield combo, ''.join(trimmed_sequence)
+        for i, exclusion in enumerate(combo):
+            trimmed_sequence[exclusion] = old_values[i]
+
 def cluster_sequences_processor(task, seq, (index, other_seq)):
     '''
     Convenience function for multiprocessing that calls the merge_function and
@@ -272,41 +296,65 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
         yield all_sequences[0]
         return
 
-    visited_indexes = set()
-    pool = multiprocessing.Pool(processes=num_processes)
+    if level == current_level:
+        # Build hashes corresponding to the sequences with the specified
+        # allowed_mutations # of bases excluded
+        _, _, allowed_mutations, scoring_ranges = task
+        if scoring_ranges is not None and len(scoring_ranges) > 0:
+            aligner = Aligner(different_score=0)
+            score_map = aligner.scoring_map(scoring_ranges[-1][1], scoring_ranges)
+        else:
+            score_map = None
 
-    for i in xrange(len(all_sequences)):
-        if i in visited_indexes:
-            continue
+        if level == 0:
+            print("Hashing and clustering...")
+        hashes = {}
+        clusters = {}
+        for i, seq in enumerate(all_sequences):
+            root = get_root_item(seq)[0]
+            for key_1, key_2 in sequence_hash_excluding_bases(root, score_map, allowed_mutations):
+                if key_1 not in hashes:
+                    hashes[key_1] = {}
+                relevant_dict = hashes[key_1]
+                if key_2 in relevant_dict:
+                    marker_index = relevant_dict[key_2]
+                    if marker_index not in clusters:
+                        clusters[marker_index] = set()
+                    clusters[marker_index].add(i)
+                else:
+                    relevant_dict[key_2] = i
 
-        seq = all_sequences[i]
-        root = get_root_item(seq)[0]
-        visited_indexes.add(i)
-
-        if level == current_level:
+        if level == 0:
+            print("Merging and returning clusters...")
+        visited_indexes = set()
+        for i, seq in enumerate(all_sequences):
+            if i in visited_indexes:
+                continue
             merged_seq = seq
-            processor = partial(cluster_sequences_processor, task, seq)
-            indexes = ((j, all_sequences[j]) for j in xrange(i + 1, len((all_sequences))) if j not in visited_indexes)
-            for index, result in pool.imap(processor, indexes, chunksize=1000):
-                if result:
-                    other_seq = all_sequences[index]
+            root = get_root_item(merged_seq)[0]
+            visited_indexes.add(i)
+            if i in clusters:
+                for other_index in sorted(list(clusters[i])):
+                    other_seq = all_sequences[other_index]
                     other_root = get_root_item(other_seq)[0]
                     merged_seq[root] = merge_sequence_info(merged_seq[root], other_seq[other_root])
-                    visited_indexes.add(index)
-            if level == 0:
-                print("After {}, visited {} sequences".format(i, len(visited_indexes)))
-
-        elif level > current_level:
+                    visited_indexes.add(other_index)
+            yield merged_seq
+            if len(visited_indexes) == len(all_sequences):
+                break
+    else:
+        num_seqs = len(all_sequences)
+        for i in xrange(num_seqs):
+            if current_level == 0 and i % 1000 == 0:
+                print("Clustering sequence {} of {}...".format(i, num_seqs))
+            seq = all_sequences[i]
+            root = get_root_item(seq)[0]
             merged_seq = {root: []}
+
             for result in cluster_sequences(seq[root], task, num_processes, current_level + 1):
                 merged_seq[root].append(result)
+            yield merged_seq
 
-        yield merged_seq
-        if len(visited_indexes) == len(all_sequences):
-            break
-
-    pool.close()
-    pool.join()
 
 ### Switching sequence hierarchy
 
