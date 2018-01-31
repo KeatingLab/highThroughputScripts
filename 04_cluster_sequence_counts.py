@@ -18,10 +18,14 @@ INDENT_CHARACTER = '\t'
 DELIMITER_CHARACTER = '\t'
 INDEX_HELPER_KEY = "__index__"
 EXCLUDED_BASE = '*'
+STAT_SIMILARITY_KEY = "similarity"
+STAT_TOTAL_KEY = "total"
+STAT_INDIVIDUAL_KEY = "individual"
 
 TASK_CLUSTER = "cluster"
 TASK_SWITCH = "switch"
 TASK_PASS = "pass"
+TASK_SIMILARITY_STATS = "similarity_stats"
 
 '''
 Each tuple should contain the following:
@@ -32,15 +36,19 @@ Each tuple should contain the following:
     * a list of ranges in which the sequences should be compared, or None
 * if the mode is TASK_SWITCH:
     * the hierarchical level which should be moved to the top level
+* if the mode is TASK_SIMILARITY_STATS:
+    * the hierarchical level at which to perform the operation (0 is top-level)
+    * the number of most frequent sequences to compute pairwise similarities for
+    * a list of ranges in which the sequences should be compared, or None
 * if the mode is TASK_PASS:
     * no additional arguments. Make sure the item is still a tuple - e.g., use
         `(TASK_PASS,)`. This is a useful parameter to pass if you want to proceed
         forward using previously-generated intermediate output.
 '''
-TASKS = [(TASK_CLUSTER, 0, 1, [(0, 27)]),
-         (TASK_CLUSTER, 1, 1, None),
-         (TASK_SWITCH, 1)]
-         #(TASK_CLUSTER, 0, 1, None),
+TASKS = [(TASK_SIMILARITY_STATS, 0, 10, None),
+         (TASK_SIMILARITY_STATS, 0, 10, [(0, 27)]),
+         (TASK_SIMILARITY_STATS, 1, 10, None)] #(TASK_CLUSTER, 0, 1, [(0, 27)]),
+         #(TASK_CLUSTER, 1, 1, None),
          #(TASK_SWITCH, 1)]
 
 '''
@@ -281,14 +289,20 @@ def cluster_sequences_processor(task, seq, (index, other_seq)):
 
 def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
     '''
-    Returns an iterator that, for each pair of candidate sequences, calls the
-    merge_function with two arguments (source_seqs,
-    candidate_seqs), where each is a nested dictionary keyed by sequences
-    referenced in the input file and where the values are either sub-
-    dictionaries or counts. If the merge_function returns None, the candidate
-    sequences are kept separate from the source sequences. If the function
-    returns another sequence dictionary, this dictionary will be used as the
-    merged result and yielded.
+    Performs the given clustering task. The task should contain the number of
+    mutations to allow for sequences to be clustered, the hierarchical level at
+    which the sequences are clustered, and optionally a list of ranges to use
+    for scoring.
+
+    The algorithm works as follows: let n be the length of all_sequences, k be
+    the number of bases to score, and t be the number of mutations allowed. For
+    every k-choose-t combination of bases in each sequence, the sequence string
+    is hashed into a dictionary where that set of bases is replaced by a neutral
+    character. If a hashing collision occurs, then that sequence is marked as
+    belonging in a cluster with the originally hashed item. Once all of the
+    sequences have been hashed, the clusters are merged together (using the first-
+    read sequence as the consensus) and yielded. Altogether, this algorithm
+    requires O(nk^t) running time as well as O(nk^t) space complexity.
     '''
     level = task[1]
 
@@ -297,8 +311,7 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
         return
 
     if level == current_level:
-        # Build hashes corresponding to the sequences with the specified
-        # allowed_mutations # of bases excluded
+        # Get a scoring map to know which bases to include in the hashes
         _, _, allowed_mutations, scoring_ranges = task
         if scoring_ranges is not None and len(scoring_ranges) > 0:
             aligner = Aligner(different_score=0)
@@ -306,6 +319,8 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
         else:
             score_map = None
 
+        # Build hashes corresponding to the sequences with the specified
+        # allowed_mutations # of bases excluded
         if level == 0:
             print("Hashing and clustering...")
         hashes = {}
@@ -316,7 +331,9 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
                 if key_1 not in hashes:
                     hashes[key_1] = {}
                 relevant_dict = hashes[key_1]
+
                 if key_2 in relevant_dict:
+                    # Found an overlap - create a cluster
                     marker_index = relevant_dict[key_2]
                     if marker_index not in clusters:
                         clusters[marker_index] = set()
@@ -324,6 +341,7 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
                 else:
                     relevant_dict[key_2] = i
 
+        # Merge the found clusters and yield them in decreasing order of frequency
         if level == 0:
             print("Merging and returning clusters...")
         visited_indexes = set()
@@ -333,12 +351,14 @@ def cluster_sequences(all_sequences, task, num_processes=15, current_level=0):
             merged_seq = seq
             root = get_root_item(merged_seq)[0]
             visited_indexes.add(i)
+
             if i in clusters:
                 for other_index in sorted(list(clusters[i])):
                     other_seq = all_sequences[other_index]
                     other_root = get_root_item(other_seq)[0]
                     merged_seq[root] = merge_sequence_info(merged_seq[root], other_seq[other_root])
                     visited_indexes.add(other_index)
+
             yield merged_seq
             if len(visited_indexes) == len(all_sequences):
                 break
@@ -382,6 +402,56 @@ def switch_sequence_hierarchy(all_sequences, task):
         #print(cluster)
         yield cluster
 
+### Similarity stats
+
+def similarity_stats_processor(task, scoring_map, seq, (index, other_seq)):
+    '''
+    Convenience function for multiprocessing that calls the merge_function and
+    returns part of the input.
+    '''
+    root = get_root_item(seq)[0]
+    other_root = get_root_item(other_seq)[0]
+    aligner = Aligner(different_score=0)
+    return index, aligner.score(root, other_root, 0, scoring_maps=(scoring_map, scoring_map))
+
+def similarity_stats(all_sequences, task, out_dir, out_prefix, num_processes=15, current_level=0):
+    '''
+    Writes the distribution of similarities of the top k (determined by `task`)
+    sequences in all_sequences to all other sequences in the list to out_dir.
+    '''
+    if current_level == 0:
+        sc.reset()
+    _, level, k, scoring_ranges = task
+
+    pool = multiprocessing.Pool(processes=num_processes)
+    aligner = Aligner()
+
+    for i in xrange(min(len(all_sequences), k)):
+        seq = all_sequences[i]
+        root = get_root_item(seq)[0]
+        if scoring_ranges is not None:
+            scoring_map = aligner.scoring_map(len(root), scoring_ranges)
+        else:
+            scoring_map = None
+
+        if level == current_level:
+            processor = partial(similarity_stats_processor, task, scoring_map, seq)
+            indexes = ((j, all_sequences[j]) for j in xrange(len((all_sequences))) if j != i)
+            for index, result in pool.imap(processor, indexes, chunksize=1000):
+                if result is not None:
+                    if level == 0:
+                        sc.counter(1, STAT_SIMILARITY_KEY, STAT_INDIVIDUAL_KEY, (i, result))
+                    sc.counter(1, STAT_SIMILARITY_KEY, STAT_TOTAL_KEY, result)
+
+        elif level > current_level:
+            similarity_stats(seq[root], task, out_dir, out_prefix, num_processes=num_processes, current_level=current_level + 1)
+
+    pool.close()
+    pool.join()
+    if current_level == 0:
+        sc.write(out_dir, prefix=out_prefix)
+
+
 ### Main
 
 def collapse_sequences_from_file(in_path, out_dir, tasks, **kwargs):
@@ -405,18 +475,21 @@ def collapse_sequences_from_file(in_path, out_dir, tasks, **kwargs):
             os.mkdir(task_dir)
         out_path = os.path.join(task_dir, os.path.basename(in_path))
 
-        if task[0] != TASK_PASS:
-            with open(out_path, 'w') as out_file:
-                if task[0] == TASK_CLUSTER:
-                    for cluster in cluster_sequences(all_sequences, task, **kwargs):
-                        write_sequence_dicts([cluster], out_path, out_file)
-                elif task[0] == TASK_SWITCH:
-                    for cluster in switch_sequence_hierarchy(all_sequences, task):
-                        write_sequence_dicts([cluster], out_path, out_file)
-                else:
-                    print("Undefined task: {}".format(task))
-        # Use out_path as input for next stage
-        in_path = out_path
+        if task[0] == TASK_SIMILARITY_STATS:
+            similarity_stats(all_sequences, task, task_dir, os.path.basename(in_path), **kwargs)
+        else:
+            if task[0] != TASK_PASS:
+                with open(out_path, 'w') as out_file:
+                    if task[0] == TASK_CLUSTER:
+                        for cluster in cluster_sequences(all_sequences, task, **kwargs):
+                            write_sequence_dicts([cluster], out_path, out_file)
+                    elif task[0] == TASK_SWITCH:
+                        for cluster in switch_sequence_hierarchy(all_sequences, task):
+                            write_sequence_dicts([cluster], out_path, out_file)
+                    else:
+                        print("Undefined task: {}".format(task))
+            # Use out_path as input for next stage
+            in_path = out_path
 
 if __name__ == '__main__':
     a = time.time()  # Time the script started
