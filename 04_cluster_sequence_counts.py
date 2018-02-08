@@ -1,8 +1,10 @@
 '''
 This script operates on the complete output of 03_count_sequences, which is
 a list of frequencies of unique sequences subindexed by the frequencies of other
-unique sequences within the same reads. It will first cluster the unique top-level
-sequences by a similarity cutoff.
+unique sequences within the same reads. It can be used to perform a variety of
+tasks on these "sequence hierarchy" files, and the output is another sequence
+hierarchy file that can be fed back in as desired. The tasks that can be performed
+using 04_cluster_sequence_counts are listed in the documentation for TASKS below.
 '''
 
 import os, sys
