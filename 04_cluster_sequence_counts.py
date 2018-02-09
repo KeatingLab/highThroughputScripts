@@ -45,7 +45,9 @@ Each tuple should contain the following:
         `(TASK_PASS,)`. This is a useful parameter to pass if you want to proceed
         forward using previously-generated intermediate output.
 '''
-TASKS = [(TASK_SIMILARITY_STATS, 0, 10, None),
+TASKS = [(TASK_CLUSTER, 0, 1, [(0, 27)]),
+         (TASK_CLUSTER, 1, 1, None),
+        # (TASK_SIMILARITY_STATS, 0, 10, None),
          (TASK_SIMILARITY_STATS, 0, 10, [(0, 27)]),
          (TASK_SIMILARITY_STATS, 1, 10, None)] #(TASK_CLUSTER, 0, 1, [(0, 27)]),
          #(TASK_CLUSTER, 1, 1, None),
