@@ -1,8 +1,10 @@
 '''
 This script operates on the complete output of 03_count_sequences, which is
 a list of frequencies of unique sequences subindexed by the frequencies of other
-unique sequences within the same reads. It will first cluster the unique top-level
-sequences by a similarity cutoff.
+unique sequences within the same reads. It can be used to perform a variety of
+tasks on these "sequence hierarchy" files, and the output is another sequence
+hierarchy file that can be fed back in as desired. The tasks that can be performed
+using 04_cluster_sequence_counts are listed in the documentation for TASKS below.
 '''
 
 import os, sys
@@ -13,10 +15,8 @@ import multiprocessing
 from functools import partial
 import itertools
 import stat_collector as sc
+from seq_hierarchy_tools import *
 
-INDENT_CHARACTER = '\t'
-DELIMITER_CHARACTER = '\t'
-INDEX_HELPER_KEY = "__index__"
 EXCLUDED_BASE = '*'
 STAT_SIMILARITY_KEY = "similarity"
 STAT_TOTAL_KEY = "total"
@@ -26,6 +26,7 @@ TASK_CLUSTER = "cluster"
 TASK_SWITCH = "switch"
 TASK_PASS = "pass"
 TASK_SIMILARITY_STATS = "similarity_stats"
+TASK_SORT = "sort"
 
 '''
 Each tuple should contain the following:
@@ -40,6 +41,9 @@ Each tuple should contain the following:
     * the hierarchical level at which to perform the operation (0 is top-level)
     * the number of most frequent sequences to compute pairwise similarities for
     * a list of ranges in which the sequences should be compared, or None
+* if the mode is TASK_SORT:
+    * the minimum top-level count to proceed, if a threshold is desired; otherwise
+        None
 * if the mode is TASK_PASS:
     * no additional arguments. Make sure the item is still a tuple - e.g., use
         `(TASK_PASS,)`. This is a useful parameter to pass if you want to proceed
@@ -47,11 +51,10 @@ Each tuple should contain the following:
 '''
 TASKS = [(TASK_CLUSTER, 0, 1, [(0, 27)]),
          (TASK_CLUSTER, 1, 1, None),
-        # (TASK_SIMILARITY_STATS, 0, 10, None),
-         (TASK_SIMILARITY_STATS, 0, 10, [(0, 27)]),
-         (TASK_SIMILARITY_STATS, 1, 10, None)] #(TASK_CLUSTER, 0, 1, [(0, 27)]),
-         #(TASK_CLUSTER, 1, 1, None),
-         #(TASK_SWITCH, 1)]
+         (TASK_SORT, 3)]
+         #(TASK_SIMILARITY_STATS, 0, 10, None),
+         #(TASK_SIMILARITY_STATS, 0, 10, [(0, 27)]),
+         #(TASK_SIMILARITY_STATS, 1, 10, None)]
 
 '''
 List of expression strings which will be evaluated and written out to the
@@ -59,124 +62,7 @@ params.txt file.
 '''
 PARAMETER_LIST = ["args.input", "args.output", "args.processes", "TASKS"]
 
-### I/O for sequence dictionary objects
-
-def read_sequence_dicts(in_file):
-    '''
-    Reads all of the sequences and counts from the given file and returns them as
-    a list of dictionaries. For instance, if 03_count_sequences.py were used to
-    group a set of sequences by Region A, then by Region B, the output of this
-    method would look like the following:
-    [
-    { A1: [ { B1: 3 }, { B2: 4 }, { B3: 1 }, ...] },
-    { A2: [ { B4: 5 }, { B5: 3 }, { B6: 2 }, ...] },
-    ...
-    ]
-    '''
-    ret = []
-    current_reading_sequence = {}
-    current_key_path = []
-    current_indent_level = 0
-    for line in in_file:
-        indent_level = len(line) - len(line.lstrip(INDENT_CHARACTER))
-        count, unique_count, seq = line.strip().split(DELIMITER_CHARACTER)
-        if indent_level == 0:
-            # Add the currently-built entry and initialize a new empty one
-            if len(current_reading_sequence) > 0:
-                ret.append(current_reading_sequence)
-            current_reading_sequence = {seq: int(count)}
-            current_key_path = [seq]
-        else:
-            if indent_level > current_indent_level:
-                # Create a new sub-dictionary
-                set_at_key_path(current_reading_sequence, current_key_path, [{seq: int(count)}])
-                current_key_path += [0, seq]
-            else:
-                if indent_level < current_indent_level:
-                    # Move into the outer dictionary
-                    current_key_path.pop()
-                    current_key_path.pop()
-                else:
-                    # Create a sibling element
-                    current_key_path[-2] += 1
-                    current_key_path[-1] = seq
-                current_item = get_at_key_path(current_reading_sequence, current_key_path[:-2])
-                current_item.append({seq: int(count)})
-        current_indent_level = indent_level
-
-    if len(current_reading_sequence) > 0:
-        ret.append(current_reading_sequence)
-    return ret
-
-def write_sequence_dicts(sequences, out_path, out_file=None, indent_level=0):
-    '''
-    Writes the given list of sequence hierarchy dictionaries to the given file.
-    Uses the same format as the output of 03_count_sequences.py.
-    '''
-    if out_file is None:
-        file = open(out_path, 'w')
-    else:
-        file = out_file
-
-    for sequence_dict in sequences:
-        seq = get_root_item(sequence_dict)[0]
-        value = sequence_dict[seq]
-        try:
-            count = int(value)
-            file.write(INDENT_CHARACTER * (indent_level * 2) + DELIMITER_CHARACTER.join([str(count), str(count), seq]) + '\n')
-        except:
-            count, unique = get_sequence_counts(value)
-            file.write(INDENT_CHARACTER * (indent_level * 2) + DELIMITER_CHARACTER.join([str(count), str(unique), seq]) + '\n')
-            write_sequence_dicts(value, out_path, out_file, indent_level + 1)
-
-    if out_file is None:
-        file.close()
-
-def get_at_key_path(dictionary, key_path):
-    '''
-    Returns the element of the given nested dictionary at the given key path (a
-    list of keys used to drill down into the dictionary). Used for reading and
-    writing sequence dictionaries.
-    '''
-    current = dictionary
-    for key in key_path:
-        current = current[key]
-    return current
-
-def set_at_key_path(dictionary, key_path, value):
-    '''
-    Sets the element of the given nested dictionary at the given key path.
-    '''
-    current = dictionary
-    for key in key_path[:-1]:
-        current = current[key]
-    current[key_path[-1]] = value
-
 ### Helper functions
-
-def get_root_item(sequence):
-    '''
-    Returns the root key and value in the given dictionary.
-    '''
-    for key, value in sequence.iteritems():
-        if key != INDEX_HELPER_KEY:
-            return key, value
-    return None
-
-def get_sequence_counts(sequence_info):
-    '''
-    Returns the total count and the unique count given a list from a sequence
-    info object.
-    '''
-    unique = len(sequence_info)
-    total = 0
-    for item in sequence_info:
-        key, value = get_root_item(item)
-        try:
-            total += int(value)
-        except:
-            total += get_sequence_counts(value)[0]
-    return total, unique
 
 def get_children_at_level(sequence, level, current_level=0):
     '''
@@ -202,12 +88,12 @@ def set_tree_at_key_path(sequence, key_path, tree):
     assert len(key_path) >= 1, "Cannot set a count without at least one key"
     for i, key in enumerate(key_path):
         root_key, root_value = get_root_item(current_dict)
+
         if INDEX_HELPER_KEY not in current_dict:
             current_dict[INDEX_HELPER_KEY] = {}
             for i, item in enumerate(root_value):
                 sub_root_key = get_root_item(item)[0]
                 current_dict[INDEX_HELPER_KEY][sub_root_key] = i
-            #print("Initialized index for {}".format(current_dict))
 
         if key in current_dict[INDEX_HELPER_KEY]:
             current_dict = root_value[current_dict[INDEX_HELPER_KEY][key]]
@@ -230,9 +116,11 @@ def merge_sequence_info(source, new):
     except:
         pass
     ret = {}
+
     for item in source:
         key, value = get_root_item(item)
         ret[key] = value
+
     for item in new:
         key, value = get_root_item(item)
         if key in ret:
@@ -252,6 +140,7 @@ def compare_sequence_dictionaries(source, new, task):
     aligner = Aligner(different_score=0)
     source_key = get_root_item(source)[0]
     new_key = get_root_item(new)[0]
+
     scoring_maps = None
     max_score = len(source_key)
     _, _, allowed_mutations, scoring_ranges = task
@@ -259,6 +148,7 @@ def compare_sequence_dictionaries(source, new, task):
         score_map = aligner.scoring_map(len(source_key), scoring_ranges)
         scoring_maps = (score_map, score_map)
         max_score = sum(score_map)
+
     return aligner.score(source_key, new_key, 0, scoring_maps=scoring_maps) >= max_score - allowed_mutations
 
 def sequence_hash_excluding_bases(sequence, scoring_map, num_exclude):
@@ -270,15 +160,19 @@ def sequence_hash_excluding_bases(sequence, scoring_map, num_exclude):
         trimmed_sequence = [c for i, c in enumerate(sequence) if len(scoring_map) > i and scoring_map[i]]
     else:
         trimmed_sequence = list(sequence)
+
     if num_exclude == 0:
         yield "none", ''.join(trimmed_sequence)
         return
+
     for combo in itertools.combinations(xrange(len(trimmed_sequence)), num_exclude):
         old_values = []
         for exclusion in combo:
             old_values.append(trimmed_sequence[exclusion])
             trimmed_sequence[exclusion] = EXCLUDED_BASE
+
         yield combo, ''.join(trimmed_sequence)
+
         for i, exclusion in enumerate(combo):
             trimmed_sequence[exclusion] = old_values[i]
 
@@ -453,6 +347,31 @@ def similarity_stats(all_sequences, task, out_dir, out_prefix, num_processes=15,
     if current_level == 0:
         sc.write(out_dir, prefix=out_prefix)
 
+### Sorting and thresholding
+
+def sort_sequences(all_sequences, task, current_level=0):
+    '''
+    Sorts the given sequences and returns them in decreasing count order. If the
+    task contains a threshold and the current_level is zero, sequence dictionaries
+    with less than the given count will be discarded.
+    '''
+
+    counts = []
+    for i, seq in enumerate(all_sequences):
+        root = get_root_item(seq)[0]
+        try:
+            count = int(seq[root])
+        except:
+            count, unique = get_sequence_counts(seq[root])
+            all_sequences[i] = {root: sort_sequences(seq[root], task, current_level=current_level + 1)}
+        counts.append(count)
+
+    threshold = task[1]
+    # Only apply the threshold to level 0
+    if threshold is None or current_level != 0:
+        threshold = -1
+    return [all_sequences[k] for k in sorted(xrange(len(counts)), key=lambda i: counts[i], reverse=True) if counts[k] >= threshold]
+
 
 ### Main
 
@@ -482,12 +401,18 @@ def collapse_sequences_from_file(in_path, out_dir, tasks, **kwargs):
         else:
             if task[0] != TASK_PASS:
                 with open(out_path, 'w') as out_file:
+
                     if task[0] == TASK_CLUSTER:
                         for cluster in cluster_sequences(all_sequences, task, **kwargs):
                             write_sequence_dicts([cluster], out_path, out_file)
+
                     elif task[0] == TASK_SWITCH:
                         for cluster in switch_sequence_hierarchy(all_sequences, task):
                             write_sequence_dicts([cluster], out_path, out_file)
+
+                    elif task[0] == TASK_SORT:
+                        write_sequence_dicts(sort_sequences(all_sequences, task), out_path, out_file)
+
                     else:
                         print("Undefined task: {}".format(task))
             # Use out_path as input for next stage

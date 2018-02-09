@@ -15,15 +15,6 @@ from cStringIO import StringIO
 import argparse
 import stat_collector as sc
 
-# The possible index codes, found from the reverse complement of the first six bases
-# of the reverse read.
-index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
-                "CAGATC","ACTTGA","GATCAG"]
-# The possible barcodes, found from the first five bases of the forward read.
-barcodes = ["ACTCG","ACTGT", "AATGC", "AGTCA", "ATACG", "ATAGC",
-                "CGATC", "CTAAG", "CTCGA", "CGAAT", "CTGGT", "CGGTT",
-                "GACTT", "GTTCA", "GATAC", "GAGCA", "GATGA", "GTCTG",
-                "TCGGA", "TGACC", "TACTG", "TCCAG", "TCGAC", "TAGCT"]
 # The format used for SeqIO to process the files.
 FORMAT = "fastq-sanger"
 # The key in the SeqRecord objects used to obtain the sequence read quality.
@@ -40,6 +31,69 @@ List of expression strings which will be evaluated and written out to the
 params.txt file.
 '''
 PARAMETER_LIST = ["args.forward", "args.reverse", "args.out", "args.mode", "args.numlines", "index_codes", "barcodes", "BARCODE_FILE_PREFIX"]
+
+### Barcode sorting logic
+
+# The possible index codes, found from the reverse complement of the first six bases
+# of the reverse read.
+index_codes = ["ATCACG","CGATGT","TTAGGC","TGACCA","ACAGTG","GCCAAT",
+                "CAGATC","ACTTGA","GATCAG"]
+# The possible barcodes, found from the first five bases of the forward read.
+barcodes = ["ACTCG","ACTGT", "AATGC", "AGTCA", "ATACG", "ATAGC",
+                "CGATC", "CTAAG", "CTCGA", "CGAAT", "CTGGT", "CGGTT",
+                "GACTT", "GTTCA", "GATAC", "GAGCA", "GATGA", "GTCTG",
+                "TCGGA", "TGACC", "TACTG", "TCCAG", "TCGAC", "TAGCT"]
+
+def get_barcode_number(forward, reverse):
+    '''
+    Determines the barcode number for the given forward and reverse sequences.
+    Modify this function and/or the above string constants to accommodate
+    different barcoding schemes.
+    '''
+    sequence = str(forward.seq)
+
+    forward_quality = forward.letter_annotations[SEQUENCE_QUALITY_KEY]
+    # If any element of the starting barcode has quality less than 20, discard the read
+    if any(True for i in forward_quality[:5] if i < 20):
+       return -1
+
+    candidate_index = reverse.seq[:6].reverse_complement()
+    # For now, demands an exact match
+    index = get_closest_barcode(candidate_index, index_codes, 6)
+    if index == -1:
+       return -1
+
+    candidate_barcode = sequence[:5]
+    # Exact match
+    barcode = get_closest_barcode(candidate_barcode, barcodes, 5)
+    if barcode == -1:
+       return -1
+
+    return (index * len(barcodes)) + barcode
+
+def accuracy(seq, other_seq, threshold):
+    '''
+    Returns the number of identical nucleotides between seq and other_seq. If the
+    accuracy is less than threshold, returns -1.
+    '''
+    acc = len([i for i in range(len(seq)) if seq[i] == other_seq[i]])
+    if acc < threshold:
+        return -1
+    return acc
+
+def get_closest_barcode(sequence, barcode_list, match_threshold=None):
+    '''
+    Returns the index of the element of barcode_list that most closely matches
+    sequence. The number of identical nucleotides must be at least match_threshold.
+    If match_threshold is not passed, then any number of identical nucleotides
+    will be admitted.
+    '''
+    threshold = match_threshold if match_threshold is not None else 0
+    index, acc = max(((i, accuracy(sequence, barcode_list[i], threshold)) for i in  xrange(len(barcode_list))), key=lambda i: i[1])
+    if acc < 0:
+        return -1
+    return index
+
 
 ### Single thread implementation
 
@@ -269,58 +323,6 @@ def join_files_processor(out_dir, num_chunks, barcode):
     for path in barcode_paths:
         if not os.path.exists(path): continue
         os.remove(path)
-
-
-### Barcode sorting logic
-
-
-def get_barcode_number(forward, reverse):
-    '''
-    Determines the barcode number for the given forward and reverse sequences.
-    '''
-    sequence = str(forward.seq)
-
-    forward_quality = forward.letter_annotations[SEQUENCE_QUALITY_KEY]
-    # If any element of the sequence has quality less than 20, discard the read
-    if any(True for i in forward_quality if i < 20):
-       return -1
-
-    candidate_index = reverse.seq[:6].reverse_complement()
-    # For now, demands an exact match
-    index = get_closest_barcode(candidate_index, index_codes, 6)
-    if index == -1:
-       return -1
-
-    candidate_barcode = sequence[:5]
-    # Exact match
-    barcode = get_closest_barcode(candidate_barcode, barcodes, 5)
-    if barcode == -1:
-       return -1
-
-    return (index * len(barcodes)) + barcode
-
-def accuracy(seq, other_seq, threshold):
-    '''
-    Returns the number of identical nucleotides between seq and other_seq. If the
-    accuracy is less than threshold, returns -1.
-    '''
-    acc = len([i for i in range(len(seq)) if seq[i] == other_seq[i]])
-    if acc < threshold:
-        return -1
-    return acc
-
-def get_closest_barcode(sequence, barcode_list, match_threshold=None):
-    '''
-    Returns the index of the element of barcode_list that most closely matches
-    sequence. The number of identical nucleotides must be at least match_threshold.
-    If match_threshold is not passed, then any number of identical nucleotides
-    will be admitted.
-    '''
-    threshold = match_threshold if match_threshold is not None else 0
-    index, acc = max(((i, accuracy(sequence, barcode_list[i], threshold)) for i in  xrange(len(barcode_list))), key=lambda i: i[1])
-    if acc < 0:
-        return -1
-    return index
 
 
 if __name__ == '__main__':

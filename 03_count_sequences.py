@@ -1,3 +1,26 @@
+'''
+This script takes the output of the 02_align_reads script that consists of lines
+containing a single DNA sequence each, and produces a "sequence hierarchy" file
+that expresses the counts of various fragments of sequence. For instance, if this
+script is asked (in SORTING_TASKS) to count first by bases 0-10, then by bases
+11-15, the output would be a text file with the following format:
+
+5   3   AAAAAAAAAA
+        2   2   BBBBB
+        2   2   CCCCC
+        1   1   DDDDD
+4   1   EEEEEEEEEE
+        4   4   FFFFF
+...
+
+The first number in each top-level item indicates the total number of reads that
+had the given sequence in bases 0-10; the second number indicates the number of
+unique sequences found in the range 11-15 that had this 0-10 sequence. A similar
+pattern holds for the next-level items. This file format is used by the 04 and 05
+scripts as well, so the tools can be swapped out as necessary. Tools to read and
+write this file format can be found in seq_hierarchy_tools.py.
+'''
+
 import os, sys
 import stat_collector as sc
 import time
