@@ -13,9 +13,36 @@ import os
 TASK_TRACK_SEQS = "track_seqs"
 TASK_TRACK_SINGLE_SEQ = "track_single_seq"
 
+def generate_barcode_list(start, end):
+    '''
+    Convenience function that produces a list of filenames given barcode numbers.
+    '''
+    return ["barcode_{}_0".format(i) for i in range(start, end + 1)]
+
+normalization_path = "../../../normalizations.csv"
+'''
+The tasks that the script should perform. The parameters in each tuple should be
+as follows:
+* If the task is TASK_TRACK_SEQS:
+    * A list of file names that can be found in the input directory and should be
+      tracked
+    * The name of the output file to write to within the output directory
+    * A path to a CSV file relative to the input directory containing
+      normalization factors, by which each read count will be divided. The file
+      should contain a line for each barcode file, where the first component is
+      the filename and the second component is the dividing factor. If this is
+      None, no normalization will be applied.
+* If the task is TASK_TRACK_SINGLE_SEQ:
+    * A list of file names that can be found in the input directory and should be
+      tracked
+    * The individual sequence that should be searched for within each file
+    * The name of the output file to write to within the output directory
+'''
 TASKS = [
-    (TASK_TRACK_SINGLE_SEQ, ["barcode_0_0", "barcode_1_0"], "AAACAAGAACCTCAGGAAATCGATTTCCCGGACGATCTGCC", "wt_counts.csv"),
-    (TASK_TRACK_SEQS, ["barcode_0_0", "barcode_1_0"], "titeseq_input_1.csv")
+    (TASK_TRACK_SEQS, generate_barcode_list(24, 55), "titeseq_input_1.csv", normalization_path),
+    (TASK_TRACK_SEQS, generate_barcode_list(73, 104), "titeseq_input_2.csv", normalization_path),
+    (TASK_TRACK_SEQS, generate_barcode_list(120, 151), "titeseq_input_3.csv", normalization_path),
+    (TASK_TRACK_SEQS, generate_barcode_list(168, 199), "titeseq_input_4.csv", normalization_path)
 ]
 
 '''
@@ -45,10 +72,11 @@ def process_sequence_file(in_path, processed_counts, target_sequence=None, retur
     for seq in seqs:
         root, value = get_root_item(seq)
         count, unique = get_sequence_counts(value)
-        if return_counts:
-            total_reads += count
+        total_reads += count
+
         if target_sequence is not None and root != target_sequence:
             continue
+
         if root not in processed_counts:
             processed_counts[root] = {}
         processed_counts[root][basename] = count
@@ -56,6 +84,18 @@ def process_sequence_file(in_path, processed_counts, target_sequence=None, retur
     if return_counts:
         return processed_counts, len(seqs), total_reads
     return processed_counts
+
+def read_normalization_factors(path):
+    '''
+    Reads the normalization factor CSV file into a dictionary keyed by file name.
+    '''
+    ret = {}
+    with open(path, 'r') as file:
+        for line in file:
+            comps = line.split(',')
+            if len(comps) != 2: continue
+            ret[comps[0]] = float(comps[1])
+    return ret
 
 def track_sequences(input_dir, output_dir, task):
     '''
@@ -70,12 +110,26 @@ def track_sequences(input_dir, output_dir, task):
         result = process_sequence_file(os.path.join(input_dir, path), result)
     print("Found {} unique sequences.".format(len(result)))
 
+    normalization_path = os.path.join(input_dir, task[3])
+    if normalization_path is not None:
+        normalization_factors = read_normalization_factors(normalization_path)
+    else:
+        normalization_factors = {}
+
     with open(out_path, "w") as file:
         for seq, counts in result.items():
             comps_list = [seq]
+            # First write all paths with no normalization
             for path in paths:
                 if path in counts:
                     comps_list.append(str(counts[path]))
+                else:
+                    comps_list.append("0")
+            # Now perform normalization if provided
+            for path in paths:
+                if path in counts:
+                    factor = normalization_factors[path] if path in normalization_factors else 1.0
+                    comps_list.append(str(counts[path] / factor))
                 else:
                     comps_list.append("0")
             file.write(",".join(comps_list) + "\n")
@@ -141,7 +195,8 @@ if __name__ == '__main__':
         os.mkdir(args.output)
 
     if args.task == -1:
-        for task in TASKS:
+        for i, task in enumerate(TASKS):
+            print("Task {}...".format(i))
             perform_task(task, args)
     else:
         task = TASKS[args.task]
