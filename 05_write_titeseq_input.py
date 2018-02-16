@@ -21,6 +21,12 @@ def generate_barcode_list(start, end):
 
 normalization_path = "../../../normalizations.csv"
 '''
+If this parameter is nonzero, then the second half of the CSV numbers will be
+enforced to be nonzero by adding this value to every element before normalization.
+'''
+NORMALIZATION_MINIMUM_VALUE = 0.1
+
+'''
 The tasks that the script should perform. The parameters in each tuple should be
 as follows:
 * If the task is TASK_TRACK_SEQS:
@@ -93,8 +99,11 @@ def read_normalization_factors(path):
     with open(path, 'r') as file:
         for line in file:
             comps = line.split(',')
-            if len(comps) != 2: continue
-            ret[comps[0]] = float(comps[1])
+            if len(comps) < 2: continue
+            try:
+                ret[comps[0]] = float(comps[1])
+            except:
+                continue
     return ret
 
 def track_sequences(input_dir, output_dir, task):
@@ -129,7 +138,7 @@ def track_sequences(input_dir, output_dir, task):
             for path in paths:
                 if path in counts:
                     factor = normalization_factors[path] if path in normalization_factors else 1.0
-                    comps_list.append(str(counts[path] / factor))
+                    comps_list.append(str((counts[path] + NORMALIZATION_MINIMUM_VALUE) / factor))
                 else:
                     comps_list.append("0")
             file.write(",".join(comps_list) + "\n")
