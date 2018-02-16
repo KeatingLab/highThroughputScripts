@@ -19,7 +19,7 @@ def generate_barcode_list(start, end):
     '''
     return ["barcode_{}_0".format(i) for i in range(start, end + 1)]
 
-normalization_path = "../../../normalizations.csv"
+normalization_path = "../../titeseq_sort_rates.csv"
 '''
 The tasks that the script should perform. The parameters in each tuple should be
 as follows:
@@ -93,8 +93,11 @@ def read_normalization_factors(path):
     with open(path, 'r') as file:
         for line in file:
             comps = line.split(',')
-            if len(comps) != 2: continue
-            ret[comps[0]] = float(comps[1])
+            if len(comps) < 2: continue
+            try:
+                ret[comps[0]] = float(comps[1])
+            except:
+                continue
     return ret
 
 def track_sequences(input_dir, output_dir, task):
