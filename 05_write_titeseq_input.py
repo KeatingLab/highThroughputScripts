@@ -34,9 +34,9 @@ as follows:
       tracked
     * The name of the output file to write to within the output directory
     * A path to a CSV file relative to the input directory containing
-      normalization factors, by which each read count will be divided. The file
+      normalization factors, by which each read count will be multiplied. The file
       should contain a line for each barcode file, where the first component is
-      the filename and the second component is the dividing factor. If this is
+      the filename and the second component is the multiplying factor. If this is
       None, no normalization will be applied.
 * If the task is TASK_TRACK_SINGLE_SEQ:
     * A list of file names that can be found in the input directory and should be
@@ -138,7 +138,7 @@ def track_sequences(input_dir, output_dir, task):
             for path in paths:
                 if path in counts:
                     factor = normalization_factors[path] if path in normalization_factors else 1.0
-                    comps_list.append(str((counts[path] + NORMALIZATION_MINIMUM_VALUE) / factor))
+                    comps_list.append(str((counts[path] + NORMALIZATION_MINIMUM_VALUE) * factor))
                 else:
                     comps_list.append(str(NORMALIZATION_MINIMUM_VALUE))
             file.write(",".join(comps_list) + "\n")
