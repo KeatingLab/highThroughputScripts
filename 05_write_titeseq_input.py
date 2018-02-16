@@ -140,7 +140,7 @@ def track_sequences(input_dir, output_dir, task):
                     factor = normalization_factors[path] if path in normalization_factors else 1.0
                     comps_list.append(str((counts[path] + NORMALIZATION_MINIMUM_VALUE) / factor))
                 else:
-                    comps_list.append("0")
+                    comps_list.append(str(NORMALIZATION_MINIMUM_VALUE))
             file.write(",".join(comps_list) + "\n")
 
 def track_single_sequence(input_dir, output_dir, task):
