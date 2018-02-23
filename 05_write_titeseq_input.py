@@ -136,8 +136,8 @@ def track_sequences(input_dir, output_dir, task):
                     comps_list.append("0")
             # Now perform normalization if provided
             for path in paths:
+                factor = normalization_factors[path] if path in normalization_factors else 1.0
                 if path in counts:
-                    factor = normalization_factors[path] if path in normalization_factors else 1.0
                     comps_list.append(str((counts[path] + NORMALIZATION_MINIMUM_VALUE) * factor))
                 else:
                     comps_list.append(str(NORMALIZATION_MINIMUM_VALUE * factor))
