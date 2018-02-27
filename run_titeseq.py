@@ -100,23 +100,22 @@ def create_b(R):
     return b
 
 def format_for_csv(value):
-    """
-    Returns a string for the given number.
-    """
+    '''Returns a string (in scientific notation) for the given number.'''
     return "{:.4e}".format(value)
 
 def format_log_for_csv(value):
-    """
-    Returns a shorter decimal string for the given number.
-    """
+    '''Returns a shorter decimal string for the given number.'''
     return "{:.2f}".format(value)
 
 def run_x_star_processor(input_vals):
+    '''
+    Helper function for run_x_star that runs in a multiprocessing pool. Takes
+    an input of the form (R, T, b, seq) and returns (seq, result) where result
+    is a tuple of the return values from x_star.
+    '''
     if input_vals is None:
         return None
     R, T, b, seq = input_vals
-
-    # Run x_star!
     return seq, x_star(R, T, b, k_scan, bin_fluorescences, basal, KD_scan, s_scan, concentrations)
 
 def run_x_star(in_path, out_path, line_num=None, num_processes=5):
@@ -133,51 +132,54 @@ def run_x_star(in_path, out_path, line_num=None, num_processes=5):
     df = pd.read_csv(in_path, header=None)
     df = df.rename(columns={0:'seq'})
 
+    # Clear output file
+    if out_path is not None:
+        open(out_path, 'w').close()
+
     raw_start, raw_end = READ_COUNT_COLUMN_RANGE
     col_start, col_end = NORMALIZED_COUNT_COLUMN_RANGE
+
+    # Generate T matrix (sum of normalized counts per CSV column)
     total_read_counts = df.iloc[:,col_start:col_end].sum().as_matrix().astype(np.float32)
     T = reshape_from_csv_format(total_read_counts)
 
-    if out_path is not None:
-        out_file = open(out_path, 'w')
-
-    pool = multiprocessing.Pool(processes=num_processes)
-
     def input_matrices(row_info):
+        '''Generate R and b matrices from the given index and row.'''
         index, row = row_info
-        print("Processing sequence {} ({})...".format(index, row['seq']))
-        # Create R and b
         if row.as_matrix(columns=df.columns[raw_start:raw_end]).sum() < MINIMUM_TOTAL_READ_COUNT:
-            print("Insufficient reads.")
             return None
+        print("Processing sequence {} ({})...".format(index, row['seq']))
         R = reshape_from_csv_format(row.as_matrix(columns=df.columns[col_start:col_end]).astype(np.float32))
         b = create_b(R)
         return R, T, b, row['seq']
 
     def write_x_star_results(seq, result):
+        '''Write the results of x_star to the output path or to the console.'''
         x, KD, s, KD_sigma, get_obj, prob, log_prob, try_LL, k_guess = result
 
-        # Write results to CSV
         if out_path is not None:
-            info_to_write = [seq] + [format_for_csv(val) for val in x.flatten()] + [format_for_csv(KD), format_for_csv(s), format_for_csv(KD_sigma)] + [format_for_csv(try_LL), format_for_csv(k_guess)]
-            out_file.write(','.join(info_to_write) + '\n')
+            # Write results to CSV
+            with open(out_path, 'a') as out_file:
+                info_to_write = [seq] + [format_for_csv(val) for val in x.flatten()] + [format_for_csv(KD), format_for_csv(s), format_for_csv(KD_sigma)] + [format_for_csv(try_LL), format_for_csv(k_guess)]
+                out_file.write(','.join(info_to_write) + '\n')
         else:
+            # Print results to console
             print("{}: KD = {}".format(seq, KD))
             print("x = {}".format(x))
 
     if line_num is not None:
+        # Process only the given line number
         row = df.iloc[line_num,:]
         print("Processing sequence {} ({})...".format(line_num, row[0]))
         write_x_star_results(*run_x_star_processor(input_matrices(row)))
     else:
+        # Process all lines using a multiprocess pool
+        pool = multiprocessing.Pool(processes=num_processes)
         inputs = imap(input_matrices, df.iterrows())
         for result in pool.imap(run_x_star_processor, inputs):
             if result is None:
                 continue
             write_x_star_results(*result)
-
-    if out_path is not None:
-        out_file.close()
 
 
 if __name__ == '__main__':
