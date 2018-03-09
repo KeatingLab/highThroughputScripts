@@ -39,9 +39,9 @@ get_B = lambda row: basal           # row.iloc[11] for naive
 List of expression strings which will be evaluated and written out to the
 params.txt file.
 '''
-PARAMETER_LIST = ["args.ts_input", "args.ts_output", "args.output", "READ_COUNT_COLUMN_RANGE", "NORMALIZED_COUNT_COLUMN_RANGE", "BINS_VARY_FIRST", "BINS_ORDER_ASCENDING", "CONCENTRATIONS_ORDER_ASCENDING", "bin_fluorescences", "concentrations"]
+PARAMETER_LIST = ["args.ts_input", "args.ts_output", "args.output", "READ_COUNT_COLUMN_RANGE", "NORMALIZED_COUNT_COLUMN_RANGE", "BINS_VARY_FIRST", "BINS_ORDER_ASCENDING", "CONCENTRATIONS_ORDER_ASCENDING", "bin_fluorescences", "concentrations", "args.both_ts_output"]
 
-def read_titeseq_items(input, output):
+def read_titeseq_items(input, output, both_ts_output=False):
     '''
     Reads the given input and output files (to TiteSeq, not to this script), and
     returns a list of lists of information about each sequence. Each inner list
@@ -65,11 +65,18 @@ def read_titeseq_items(input, output):
 
     num_completed = 0
     raw_start, raw_end = READ_COUNT_COLUMN_RANGE
-    col_start, col_end = NORMALIZED_COUNT_COLUMN_RANGE
-
-    # Sum normalized counts per CSV column, to account for sequencing depth
-    total_read_counts = in_csv.iloc[:,raw_start:raw_end].sum().as_matrix().astype(np.float32)
-    T = reshape_from_csv_format(total_read_counts)
+    if both_ts_output:
+        # The ts_input file is a run_titeseq output file. Get the x array from positions 1-NM.
+        raw_start = 1
+        raw_end = 1 + raw_end - raw_start
+        col_start, col_end = raw_start, raw_end
+        T = reshape_from_csv_format(np.ones(raw_end - raw_start))
+    else:
+        # The ts_input file is a run_titeseq input file, which has both raw and normalized counts
+        col_start, col_end = NORMALIZED_COUNT_COLUMN_RANGE
+        # Sum normalized counts per CSV column, to account for sequencing depth
+        total_read_counts = in_csv.iloc[:,raw_start:raw_end].sum().as_matrix().astype(np.float32)
+        T = reshape_from_csv_format(total_read_counts)
 
     for _, row in in_csv.iterrows():
         seq = row.iloc[0]
@@ -84,14 +91,14 @@ def read_titeseq_items(input, output):
 
     return seq_info
 
-def test_kd_fits(ts_input, ts_output, output):
+def test_kd_fits(ts_input, ts_output, output, both_ts_output=False):
     '''
     Reads the read count arrays from the given TiteSeq input/output files, and
     determines the fit between the actual and fit counts as well as the strength
     of correlation between the actual/predicted counts and the fit Kd curve.
     Writes the results to the given output path.
     '''
-    seqs = read_titeseq_items(ts_input, ts_output)
+    seqs = read_titeseq_items(ts_input, ts_output, both_ts_output)
 
     data = []
     for seq, info in seqs.iteritems():
@@ -129,18 +136,20 @@ if __name__ == '__main__':
                         help='The path to the CSV input to TiteSeq')
     parser.add_argument('ts_output', metavar='TO', type=str,
                         help='The path to the CSV output to TiteSeq')
+    parser.add_argument('-bto', '--both-ts-output', action='store_true',
+                        dest='both_ts_output', help='Provide this flag if the ts_input file is formatted like an output file from run_titeseq.')
     parser.add_argument('output', metavar='O', type=str,
-                        help='The path to the directory to write output')
+                        help='The path to the CSV file in which to write output')
     args = parser.parse_args()
 
-    if not os.path.exists(args.output):
-        os.mkdir(args.output)
+    if not os.path.exists(os.path.dirname(args.output)):
+        os.mkdir(os.path.dirname(args.output))
 
-    test_kd_fits(args.ts_input, args.ts_output, os.path.join(args.output, os.path.basename(args.ts_output)))
+    test_kd_fits(args.ts_input, args.ts_output, args.output, both_ts_output=args.both_ts_output)
 
     b = time.time()
     print("Took {} seconds to execute.".format(b - a))
 
     # Write out the input parameters to file
-    params_path = os.path.join(args.output, "params.txt")
+    params_path = os.path.join(os.path.dirname(args.output), "params.txt")
     sc.write_input_parameters([(name, eval(name)) for name in PARAMETER_LIST], params_path)
