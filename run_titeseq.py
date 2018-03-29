@@ -77,7 +77,7 @@ def run_lmfit(x, y, init0, sat0, Kd0, graph):
 
     if np.isnan(y).any():
         return None
-        
+
     def basic_fit(x, init, sat, Kd):
         return init + (sat - init) * x / (x + Kd)
 
@@ -125,7 +125,7 @@ def run_x_star_processor(mode, input_vals):
             return None
 
         x, KD, s, KD_sigma, get_obj, prob, log_prob, try_LL, k_guess = result
-        return [seq] + [format_for_csv(val) for val in x.flatten()] + [format_for_csv(KD), format_for_csv(s), format_for_csv(KD_sigma), format_for_csv(try_LL), format_for_csv(k_guess)]
+        return [seq] + [format_for_csv(val) for val in x.flatten()] + [format_for_csv(KD), format_for_csv(s), format_for_csv(basal), format_for_csv(KD_sigma), format_for_csv(try_LL), format_for_csv(k_guess)]
 
     elif mode == MODE_NAIVE:
         result = naive_titeseq(R, T, concentrations)
@@ -133,10 +133,14 @@ def run_x_star_processor(mode, input_vals):
             return None
 
         x, KD, s, b, cov = result
+        # Convert average bin position to all values - when the 'average bin position'
+        # is calculated for this output, it should equal what we got here
+        x = fake_bin_data_from_averages(x)
         return [seq] + [format_for_csv(val) for val in x.flatten()] + [format_for_csv(KD), format_for_csv(s), format_for_csv(b)] + [format_for_csv(val) for val in cov.flatten()]
 
     elif mode == MODE_MT:
         averages = average_bin_positions(R / T).flatten()
+        print(R, T, averages)
         result = run_lmfit(concentrations, averages, MT_LOWER, MT_UPPER, MT_KD_INITIAL, False)
         if result is None:
             return None
@@ -144,7 +148,7 @@ def run_x_star_processor(mode, input_vals):
         x, KD, s, b, err, chi, r2 = result
         # Convert average bin position to all values - when the 'average bin position'
         # is calculated for this output, it should equal what we got here
-        x = np.tile(x, (4, 1)).T / 10.0
+        x = fake_bin_data_from_averages(x)
         return [seq] + [format_for_csv(val) for val in x.flatten()] + [format_for_csv(KD), format_for_csv(s), format_for_csv(b), format_for_csv(err), format_for_csv(chi), format_for_csv(r2)]
     else:
         assert False, "Unidentified mode: {}".format(mode)
@@ -214,7 +218,7 @@ def run_x_star(in_path, out_path, mode, line_num=None, num_processes=5, treat_as
         # Process all lines using a multiprocess pool
         pool = multiprocessing.Pool(processes=num_processes)
         inputs = imap(input_matrices, df.iterrows())
-        for result in pool.imap(processor, inputs):
+        for result in map(processor, inputs): #pool.imap(processor, inputs):
             if result is None:
                 continue
             write_x_star_results(result)

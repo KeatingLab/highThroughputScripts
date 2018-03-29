@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.special import factorial
 
 '''
 The range of indexes of the columns in the TiteSeq input CSV to use as
@@ -68,6 +69,11 @@ def reshape_from_csv_format(matrix, use_input_order=True):
     Formats the given 1-D numpy array so that it fits the requirements for
     TiteSeq, given the user-provided settings above regarding the dimensions and
     ordering of the CSV values.
+
+    If use_input_order is True, the matrix will be reshaped using the above
+    settings. If it is False, the matrix will be assumed to be in the correct
+    order already: c1b1, c1b2, c1b3, c1b4, c2b1, c2b2, ... where c is concentration
+    and b is bin.
     '''
     # Get dimensions of matrices from user-provided arrays
     M = concentrations.shape[0]
@@ -104,8 +110,17 @@ def normalized_count_array(R):
     '''
     return R / R.sum(axis=1, keepdims=True)
 
-def average_bin_positions(R):
+def average_bin_positions(R, already_normalized=False):
     '''
     Returns a vector containing the average bin positions for each concentration.
     '''
+    if already_normalized:
+        return R[:,0] * (len(bin_fluorescences) * (len(bin_fluorescences) + 1) / 2.0)
     return np.average(np.vstack([range(1, len(bin_fluorescences) + 1)] * len(concentrations)).astype(float), axis=1, weights=normalized_count_array(R))
+
+def fake_bin_data_from_averages(averages):
+    '''
+    Returns a matrix that, when average_bin_positions is applied to it, will yield
+    the correct averages.
+    '''
+    return np.tile(averages, (len(bin_fluorescences), 1)).T / (len(bin_fluorescences) * (len(bin_fluorescences) + 1) / 2.0)
