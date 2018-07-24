@@ -149,10 +149,10 @@ def sort_sequence_chunks(records_forward, records_reverse, chunk_size, output_st
     def collate_records():
         # Collect reverse records now
         barcode_bins = {}
-        for record_index in xrange(len(collected_forward)):
+        for record_index, forward in enumerate(collected_forward):
             reverse = next(records_reverse, None)
             if reverse is None: break
-            barcode_number = get_barcode_number(collected_forward[record_index], reverse)
+            barcode_number = get_barcode_number(forward, reverse)
             if barcode_number == -1: continue
             if barcode_number in barcode_bins:
                 barcode_bins[barcode_number].append((forward, reverse))
@@ -276,14 +276,12 @@ def streaming_work_supplier(lock, streams, split_dirs, num_lines, num_chunk_file
             print("Transferring chunk {}...".format(chunk_number))
             forward_path = os.path.join(split_dirs[0], str(chunk_number))
             reverse_path = os.path.join(split_dirs[1], str(chunk_number))
-            chunk_1 = load_file_chunk(forward_stream, num_lines)
-            chunk_2 = load_file_chunk(reverse_stream, num_lines)
+            finished_1 = write_file_chunk(forward_stream, forward_path, num_lines)
+            finished_2 = write_file_chunk(reverse_stream, reverse_path, num_lines)
             with lock:
-                available_chunk_files.append((chunk_1, chunk_2))
+                available_chunk_files.append((forward_path, reverse_path))
 
             chunk_number += 1
-            finished_1 = len(chunk_1) == 0
-            finished_2 = len(chunk_2) == 0
             if finished_1 or finished_2:
                 print("Finished reading chunks.")
                 return
