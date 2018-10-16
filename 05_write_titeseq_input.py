@@ -19,7 +19,6 @@ def generate_barcode_list(start, end):
     '''
     return ["barcode_{}_0".format(i) for i in range(start, end + 1)]
 
-normalization_path = "../../titeseq_sort_rates.csv"
 '''
 If this parameter is nonzero, then the second half of the CSV numbers will be
 enforced to be nonzero by adding this value to every element before normalization.
@@ -33,11 +32,8 @@ as follows:
     * A list of file names that can be found in the input directory and should be
       tracked
     * The name of the output file to write to within the output directory
-    * A path to a CSV file relative to the input directory containing
-      normalization factors, by which each read count will be multiplied. The file
-      should contain a line for each barcode file, where the first component is
-      the filename and the second component is the multiplying factor. If this is
-      None, no normalization will be applied.
+    * A boolean indicating whether or not to use the normalization path supplied
+      by the caller, if available.
 * If the task is TASK_TRACK_SINGLE_SEQ:
     * A list of file names that can be found in the input directory and should be
       tracked
@@ -45,17 +41,17 @@ as follows:
     * The name of the output file to write to within the output directory
 '''
 TASKS = [
-    (TASK_TRACK_SEQS, generate_barcode_list(24, 55), "titeseq_input_1.csv", normalization_path),
-    (TASK_TRACK_SEQS, generate_barcode_list(73, 104), "titeseq_input_2.csv", normalization_path),
-    (TASK_TRACK_SEQS, generate_barcode_list(120, 151), "titeseq_input_3.csv", normalization_path),
-    (TASK_TRACK_SEQS, generate_barcode_list(168, 199), "titeseq_input_4.csv", normalization_path)
+    (TASK_TRACK_SEQS, generate_barcode_list(24, 55), "titeseq_input_1.csv", True),
+    (TASK_TRACK_SEQS, generate_barcode_list(73, 104), "titeseq_input_2.csv", True),
+    (TASK_TRACK_SEQS, generate_barcode_list(120, 151), "titeseq_input_3.csv", True),
+    (TASK_TRACK_SEQS, generate_barcode_list(168, 199), "titeseq_input_4.csv", True)
 ]
 
 '''
 List of expression strings which will be evaluated and written out to the
 params.txt file.
 '''
-PARAMETER_LIST = ["args.input", "args.output", "TASKS"]
+PARAMETER_LIST = ["args.input", "args.output", "args.norm", "TASKS"]
 
 def process_sequence_file(in_path, processed_counts, target_sequence=None, return_counts=False):
     '''
@@ -106,7 +102,7 @@ def read_normalization_factors(path):
                 continue
     return ret
 
-def track_sequences(input_dir, output_dir, task):
+def track_sequences(input_dir, output_dir, task, norm_path=None):
     '''
     Tracks the unique sequences through the files given by the file names in
     `task`, and writes their counts in CSV format to the specified output file
@@ -119,9 +115,8 @@ def track_sequences(input_dir, output_dir, task):
         result = process_sequence_file(os.path.join(input_dir, path), result)
     print("Found {} unique sequences.".format(len(result)))
 
-    normalization_path = os.path.join(input_dir, task[3])
-    if normalization_path is not None:
-        normalization_factors = read_normalization_factors(normalization_path)
+    if norm_path is not None and task[3]:
+        normalization_factors = read_normalization_factors(norm_path)
     else:
         normalization_factors = {}
 
@@ -183,7 +178,7 @@ def perform_task(task, args):
     Delegates the given task to one of the functions in the script.
     '''
     if task[0] == TASK_TRACK_SEQS:
-        track_sequences(args.input, args.output, task)
+        track_sequences(args.input, args.output, task, norm_path=args.norm)
     elif task[0] == TASK_TRACK_SINGLE_SEQ:
         track_single_sequence(args.input, args.output, task)
     else:
@@ -198,6 +193,8 @@ if __name__ == '__main__':
                         help='The path to the output directory')
     parser.add_argument('-t', '--task', type=int, default=-1,
                         help='The task index to perform (if using multiple nodes)')
+    parser.add_argument('-n', '--norm', type=str, default=None,
+                        help='A path to a CSV file of normalization factors')
     args = parser.parse_args()
 
     if not os.path.exists(args.output):
