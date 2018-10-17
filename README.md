@@ -27,8 +27,10 @@ The script `02_align_reads.py` combines the forward and reverse reads by alignin
 #SBATCH --array=0-216
 ...
 
-python 02_align_reads.py data/sorted_barcodes/barcode_${SLURM_ARRAY_TASK_ID} data/aligned_reads [-t 20] [-m 1] [-d 3] [-tr 20] [-mr 7] --stats
+python 02_align_reads.py data/sorted_barcodes/barcode_${SLURM_ARRAY_TASK_ID} data/aligned_reads [-t 20] [-m 1] [-d 3] [-tr 20] [-mr 7] --stats [--check]
 ```
+
+The `--check` parameter can be used to rerun the tasks partially, so that only the tasks for which output was not generated will be run. By default this script overwrites any files with the same names in the output directory.
 
 *Customization:* You can adjust some parameters for the alignment at the top of the script. For example, the `REFERENCE_SEQUENCES`, `OUTPUT_RANGES`, and `REFERENCE_SCORING_RANGES` constants would be particularly useful to tailor to a particular experimental setup. (See the script for documentation on these constants.)
 

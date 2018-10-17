@@ -201,7 +201,7 @@ def update_quality_stats(parent_key, record):
 
 ### Main function
 
-def write_combined_records(input_path, references, out_dir, num_processes=15, stats=False, **kwargs):
+def write_combined_records(input_path, references, out_dir, num_processes=15, stats=False, check=False, **kwargs):
     '''
     Combines the records at input_path by aligning them to the given reference sequences,
     and saves them to the appropriate locations within out_dir. The combined DNA
@@ -219,6 +219,15 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, st
     dna_path = os.path.join(out_dir, "dnaframe")
     aa_path = os.path.join(out_dir, "seqframe")
     qual_path = os.path.join(out_dir, "qualframe")
+    dna_filenames = [os.path.join(dna_path, basename + "_{}".format(ref)) for ref in xrange(len(references))]
+    aa_filenames = [os.path.join(aa_path, basename + "_{}".format(ref)) for ref in xrange(len(references))]
+    qual_filenames = [os.path.join(qual_path, basename + "_{}".format(ref)) for ref in xrange(len(references))]
+
+    # Check if files exist and abort if desired
+    if check and all([os.path.exists(fn) for fn in dna_filenames + aa_filenames + qual_filenames]):
+        print("All paths already exist - aborting.")
+        return
+
     for path in [dna_path, aa_path, qual_path]:
         if not os.path.exists(path):
             os.mkdir(path)
@@ -226,9 +235,9 @@ def write_combined_records(input_path, references, out_dir, num_processes=15, st
         stats_path = os.path.join(out_dir, "stats")
 
     # Open file streams
-    dna_files = [open(os.path.join(dna_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
-    aa_files = [open(os.path.join(aa_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
-    qual_files = [open(os.path.join(qual_path, basename + "_{}".format(ref)), "w") for ref in xrange(len(references))]
+    dna_files = [open(path, "w") for path in dna_filenames]
+    aa_files = [open(path, "w") for path in aa_filenames]
+    qual_files = [open(path, "w") for path in qual_filenames]
 
     with open(input_path, 'rU') as file:
 
@@ -275,6 +284,8 @@ if __name__ == '__main__':
                         help='The path to the FASTQ input file')
     parser.add_argument('output', metavar='O', type=str,
                         help='The path to the output directory')
+    parser.add_argument('--check', dest='check', action='store_true',
+                        help='only run this task if the output directory does not already contain the output file')
     parser.add_argument('-t', '--threshold', type=int, default=0,
                         help='The quality score below which reads should not be used (default 0)')
     parser.add_argument('-m', '--misreads', type=int, default=0,
@@ -289,7 +300,7 @@ if __name__ == '__main__':
                         help='The number of processes to use')
     parser.add_argument('-s', '--stats', dest='stats', action='store_true',
                         help='Whether to output stats into output/[base]_stats.txt')
-    parser.set_defaults(stats=False)
+    parser.set_defaults(stats=False, check=False)
     args = parser.parse_args()
 
     threshold_reverse = args.threshold_reverse if args.threshold_reverse != -1 else args.threshold
@@ -298,6 +309,7 @@ if __name__ == '__main__':
     write_combined_records(args.input,
                            REFERENCE_SEQUENCES,
                            args.output,
+                           check=args.check,
                            num_processes=args.processes,
                            threshold=args.threshold,
                            misreads=args.misreads,
