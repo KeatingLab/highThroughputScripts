@@ -3,6 +3,8 @@
 
 These scripts provide a flexible pipeline that begins with large high-throughput sequence read files and ends with a collection of protein sequences mapped to Kds. Each step of the process is designed to be modular and robust, with options to collect statistics about the runs. Furthermore, each step outputs the run parameters in a text file along with the actual output, making it easy to trace back variations between runs of the pipeline.
 
+This repository contains two scripts from the TiteSeq paper, `KD_fit_log_poiss.py` and `ratio_x.py` (Adams et al 2016, [original on GitHub](https://github.com/jbkinney/16_titeseq)). Although the current work uses the Mass-Titer approach, these scripts can be executed in the `run_titeseq.py` step to provide an alternate method for fitting Kds.
+
 Optionally, you can run the `random_sample_data.py` script to test the pipeline on a smaller version of the dataset. For example, to collect a random 10% of reads:
 
 ```
@@ -71,7 +73,7 @@ normpath="data/titeseq_sort_rates.csv"
 python 05_write_titeseq_input.py $input $output -t ${SLURM_ARRAY_TASK_ID} -n $normpath
 ```
 
-The purpose of the `$normpath` variable above is to normalize the counts on a bin-by-bin basis. This controls for having some bins oversampled and others undersampled. The `TASKS` parameter allows you to specify if you want to use this normalization procedure or not.
+The purpose of the `$normpath` variable above is to normalize the counts on a bin-by-bin basis. This controls for having some bins oversampled and others undersampled during cell sorting. The `TASKS` parameter allows you to specify if you want to use this normalization procedure or not.
 
 ### 6. Fit dissociation curves
 
@@ -84,4 +86,4 @@ Finally, the `run_titeseq.py` script provides a few options for estimating Kds a
 $ python run_titeseq.py data/titeseq_input_${SLURM_ARRAY_TASK_ID}.csv data/fit_output -m MODE
 ```
 
-The `-m` (mode) parameter should be one of the following: `x_star`, `naive`, or `mass_titer`. The first mode uses the Titeseq routine developed by Kinney et al., while `naive` is a simple scikit-learn method and `mass_titer` uses lmfit. The output in all cases is a labeled CSV file ready for analysis.
+The `-m` (mode) parameter should be one of the following: `x_star`, `naive`, or `mass_titer`. The `x_star` mode uses the TiteSeq routine from Adams et al, 2016, while `naive` is a simple scikit-learn method and `mass_titer` uses lmfit. The output in all cases is a labeled CSV file ready for analysis.
