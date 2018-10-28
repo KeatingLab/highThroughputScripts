@@ -11,6 +11,8 @@ Optionally, you can run the `random_sample_data.py` script to test the pipeline 
 $ python3 random_sample_data.py forward_reads.fastq reverse_reads.fastq /output/dir/ -p 0.1
 ```
 
+**Note: Other than `random_sample_data.py`, all scripts are written to be run in Python 2.**
+
 ### 1. Sort barcodes
 
 The first and most time-intensive step, performed by `01_barcode_sort.py`, is simply to read the forward and reverse read files and sort the reads into the bins by their barcodes. Because this process is essentially limited by the machine's disk speed, this script may take up to about 30 hours to complete on a typical pair of Illumina fastq files (~60GB each). To run, simply call:
