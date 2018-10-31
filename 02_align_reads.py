@@ -48,7 +48,7 @@ The references are the sequences onto which the forward and reverse reads will b
 scaffolded. The output will be indexed by the number of the reference to which
 each read was aligned.
 '''
-REFERENCE_SEQUENCES = ["ACTCGTCCCAAACAAGAACCTCAGGAAATCGATTTCCCGGACGATCTGCCAAACGACTTATCACG"]
+REFERENCE_SEQUENCES = ["ACTCGTCCGCTGCGCGGGTTCAACGCTCCTGCGACGTCTGAACCATCTTCTTTTGAATTTCCCCCTCCGCCGACCGAGGACGAGTTGGAGATTATCCGCGAGACAGCGAGCTCATTGGACTCTCGCATCGCTCGAGGCCGATGT"]
 
 '''
 If OUTPUT_RANGES is not None, it should be a list with the same length as
@@ -64,7 +64,7 @@ to one of the reference sequences. When a read is aligned to the reference seque
 only the given ranges of the reference sequence will be used to score the alignment.
 This is useful if leading or trailing regions are known to be varied.
 '''
-REFERENCE_SCORING_RANGES = None
+REFERENCE_SCORING_RANGES = [[(0, 15)]]
 
 '''
 List of expression strings which will be evaluated and written out to the
@@ -98,7 +98,7 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
     reference_scoring_range = reference_scoring_ranges[reference_index] if reference_scoring_ranges is not None else None
 
     # Align reverse to reference
-    reverse_offset_to_ref, reverse_score = aligner.align(reference, reverse_str, unidirectional=True, reverse=True, min_overlap=15, scoring_ranges=(reference_scoring_range, None))
+    reverse_offset_to_ref, reverse_score = aligner.align(reference, reverse_str, unidirectional=True, reverse=True, min_overlap=len(reverse_str), scoring_ranges=(reference_scoring_range, None))
 
     # Compare the pairwise scores of obeying the forward and obeying the reverse alignments to reference,
     # and adjust the alignment offsets accordingly.
@@ -113,7 +113,7 @@ def combine_records(forward_record, reverse_record, reference_sequences, min_ove
 
     alignment_set = [(reference, 0), (forward_str, forward_offset), (reverse_str, reverse_offset)]
     # Uncomment to print the resulting alignments
-    # print('\n'.join(aligner.format_multiple(*alignment_set)))
+    print('\n'.join(aligner.format_multiple(*alignment_set)))
 
     # Discard the read if total length is too different from reference length
     if max_length_delta <= len(reference):
