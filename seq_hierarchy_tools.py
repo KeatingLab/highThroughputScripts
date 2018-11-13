@@ -113,7 +113,12 @@ def get_sequence_counts(sequence_info):
     Returns the total count and the unique count given a list from a sequence
     info object.
     '''
-    unique = len(sequence_info)
+    try:
+        # Interpret the value as a terminal node (just a count)
+        value = int(sequence_info)
+        return value, 1
+    except:
+        unique = len(sequence_info)
     total = 0
     for item in sequence_info:
         key, value = get_root_item(item)
