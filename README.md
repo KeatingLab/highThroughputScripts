@@ -1,6 +1,6 @@
 # highThroughputScripts
 
-I.  INTRO
+I.    INTRO
 
 This repository contains the scripts necessary for processing and fitting data from a titration sort 
 as described in Whitney et al. (publication pending). The scripts are numbered and meant to be run 
@@ -16,7 +16,13 @@ input files for a single paired-end experiment. Also, our amplicon construction 
 index reads for each position on the chip were not considered (barcodes were inline). 
 
 
-II. USAGE 
+II.   Dependencies 
+
+numpy, scipy.optimize, pandas, pickle, itertools, lmfit, Bio, multiprocessing, argparse, aligner, 
+seq_hierarchy_tools, 
+
+
+III.  USAGE 
 
 Briefly, the scripts operate as described below: 
 
